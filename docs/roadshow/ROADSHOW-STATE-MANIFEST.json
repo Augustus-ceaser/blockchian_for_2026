@@ -1,0 +1,38 @@
+{
+  "alembic_head": "20260728_0049",
+  "audit_head_digest": "sha256:75b9b969d8a3d81f65aab15c5fbfa8ab3b6c805581624cc0cac602332db7e866",
+  "canonical_storage_identity": {
+    "minio_volume": "medtrust-space_minio_data",
+    "postgres_volume": "medtrust-space_postgres_data"
+  },
+  "clinical_use": false,
+  "deployment_mode": "local",
+  "external_data_materialized": false,
+  "external_executor_registered": false,
+  "external_model_materialized": false,
+  "generated_at": "2026-07-28T00:32:52.463245+00:00",
+  "hard_isolation": false,
+  "invalid_audit_chains": 0,
+  "manifest_digest": "sha256:9ec948386ff69804baee50218292c130a289369b02d35b3649a91a4e307641d7",
+  "manifest_version": "phase5.12.7/roadshow-state/v1",
+  "minio_object_count": 30,
+  "project_name": "MedTrust Space",
+  "public_dataset_catalog_count": 982,
+  "public_model_catalog_count": 16,
+  "published_data_products": 3,
+  "published_model_products": 2,
+  "reference_compute_run_id": "e8c997ae-90f7-44d7-955a-6fa169cc9a7b",
+  "reference_data_version_id": "c1aba304-9572-5af5-bd37-c8e737857746",
+  "reference_metrics": {
+    "accuracy": "0.95",
+    "correct_count": 19,
+    "sample_count": 20
+  },
+  "reference_model_version_id": "14942c18-c38a-5e35-b3cf-ced2e14b5062",
+  "reference_relation_id": "df7ec70c-f4cb-5df7-842d-bf2af6d66961",
+  "reference_release_package_id": "cbe04697-376b-4de8-b58a-18643037851e",
+  "source_commit": "874f9ab6ff33e9195720679effe3edb26147f068",
+  "source_dirty": true,
+  "static_relation_count": 6,
+  "verified_relation_count": 1
+}

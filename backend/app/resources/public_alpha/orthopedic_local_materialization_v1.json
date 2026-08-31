@@ -1,0 +1,46 @@
+{
+  "schema_version": "medtrust.orthopedic-local-materialization/v1",
+  "manifest_id": "medtrust-orthopedic-local-assets-v1",
+  "manifest_version": "2026.08.29-local-v1",
+  "dataset": {
+    "external_id": "medtrust_orthopedic_dataset_fracatlas_v6",
+    "asset_id": "orthopedic.dataset.fracatlas.v6",
+    "archive": {
+      "asset_id": "orthopedic.dataset.fracatlas.v6.archive",
+      "relative_path": "datasets/fracatlas/v6/archive/FracAtlas.zip",
+      "size_bytes": 338412750,
+      "sha256": "747119b26f2684e0e35a7688083b14b12a206149b0cfe5357824b69b3a5e6cf8",
+      "md5": "931dd40ad6e070bb0724d66cfbbef9f0"
+    },
+    "extracted": {
+      "asset_id": "orthopedic.dataset.fracatlas.v6.extracted",
+      "relative_path": "datasets/fracatlas/v6/extracted/FracAtlas",
+      "dataset_index": {
+        "asset_id": "orthopedic.dataset.fracatlas.v6.dataset-index",
+        "relative_path": "dataset.csv",
+        "sha256": "058e1c3097cf715ee24ad8e7122f8a0bff462f47890933a34ca058f70c27a67a"
+      },
+      "class_directories": {
+        "fractured": {
+          "relative_path": "images/Fractured",
+          "file_count": 717
+        },
+        "non_fractured": {
+          "relative_path": "images/Non_fractured",
+          "file_count": 3366
+        }
+      },
+      "image_file_count": 4083
+    }
+  },
+  "model": {
+    "external_model_id": "medtrust_model_fracatlas_mnv3_target_v1",
+    "asset_id": "orthopedic.model.medtrust-fracatlas-mnv3.v1",
+    "linked_dataset_external_id": "medtrust_orthopedic_dataset_fracatlas_v6",
+    "manifest": {
+      "asset_id": "orthopedic.model.medtrust-fracatlas-mnv3.v1.manifest",
+      "relative_path": "models/target-task/medtrust-fracatlas-mnv3/v1/model_manifest.json",
+      "sha256": "4cafd55f17924777aa7f5dac56f975184c59a5cca3cbc9a411bd475e8e2612de"
+    }
+  }
+}

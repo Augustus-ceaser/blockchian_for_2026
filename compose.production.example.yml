@@ -1,0 +1,72 @@
+name: medtrust-space-production-template
+
+x-runtime: &runtime
+  build: ./backend
+  restart: unless-stopped
+  environment:
+    MEDTRUST_DEPLOYMENT_MODE: production-template
+    MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:-https://medtrust.example.invalid}
+    MEDTRUST_DATABASE_URL_FILE: /run/secrets/database_url
+    MEDTRUST_MINIO_SECRET_KEY_FILE: /run/secrets/minio_secret_key
+  logging:
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  gateway:
+    build: { context: ., dockerfile: gateway/Dockerfile }
+    ports: ["127.0.0.1:${MEDTRUST_GATEWAY_PORT:-8080}:8080"]
+    restart: unless-stopped
+    depends_on: [backend]
+  backend:
+    <<: *runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+  dispatcher:
+    <<: *runtime
+    command: python -m app.workers.outbox_dispatcher
+  coordinator:
+    image: ${MEDTRUST_COORDINATOR_IMAGE:-medtrust-space-coordinator:phase5.10}
+    restart: unless-stopped
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: production-template
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:-https://medtrust.example.invalid}
+      MEDTRUST_DATABASE_URL_FILE: /run/secrets/database_url
+      MEDTRUST_EXECUTION_COORDINATOR_PATHMNIST: "true"
+      MEDTRUST_PATHMNIST_DATASET_PATH: /assets/pathmnist.npz
+      MEDTRUST_PATHMNIST_MODEL_PATH: /assets/resnet18_28_1.pth
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+    logging:
+      options: { max-size: "10m", max-file: "5" }
+  callback:
+    <<: *runtime
+    command: python -m app.workers.execution_callback_worker
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: production-template
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:-https://medtrust.example.invalid}
+      MEDTRUST_DATABASE_URL_FILE: /run/secrets/database_url
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+  postgres:
+    image: postgres:16-alpine
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    restart: unless-stopped
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data
+    volumes: [minio_data:/data]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
+  coordinator_workspaces:
+
+# Add orchestrator-managed secrets and backup jobs before any deployment.

@@ -1,0 +1,57 @@
+onboarding_profile: pathmnist_official_resnet18_v1
+model_name: PathMNIST official ResNet-18 28px
+model_version: "1"
+model_digest: "sha256:64774e5fdf8786c7f0182eb6a7300d162b12a7a93455805cb2987eb0c12258e0"
+entrypoint_id: pathmnist_resnet18_v1
+runtime: python-pytorch-cpu
+dependency_lock_digest: "sha256:0f26784743e5c7609b59e3d8b4ca832d7d50444ebf9c0a490a2025b548598e9b"
+input_schema_version: pathmnist-rgb-28x28/v1
+output_schema_version: pathmnist-aggregate-inference/v1
+allowed_output_types:
+  - model_artifact
+  - aggregate_statistics
+allowed_output_files:
+  - aggregate_metrics.json
+  - confusion_matrix.csv
+  - execution_summary.json
+network_access: false
+cpu_limit: 1
+memory_limit: 2048
+timeout_seconds: 120
+enabled: true
+inference_only: true
+device: cpu
+non_clinical: true
+source_reference: https://zenodo.org/records/7782114
+source_code_reference: https://github.com/MedMNIST/experiments
+weights_rights: not_specified_by_source
+weights_rights_boundary: Internal non-clinical reproducibility test only; no redistribution claim.
+architecture:
+  family: resnet18
+  variant: official MedMNIST small-image ResNet
+  input_shape: [3, 28, 28]
+  class_count: 9
+preprocessing:
+  layout: NHWC-to-NCHW
+  scaling: uint8-to-float32-divide-255
+  normalization:
+    mean_decimal: ["0.5", "0.5", "0.5"]
+    std_decimal: ["0.5", "0.5", "0.5"]
+labels:
+  - adipose
+  - background
+  - debris
+  - lymphocytes
+  - mucus
+  - smooth muscle
+  - normal colon mucosa
+  - cancer-associated stroma
+  - colorectal adenocarcinoma epithelium
+output_policy:
+  aggregate_only: true
+  patient_level_output: false
+  raw_image_export: false
+  raw_feature_export: false
+  model_weight_export: false
+  external_release: false
+asset_locator: registered://models/pathmnist-resnet18/v1

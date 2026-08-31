@@ -1,0 +1,20 @@
+services:
+  postgres-phase513c-test:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:55433:5432"
+    environment:
+      POSTGRES_DB: medtrust_phase513c_test
+      POSTGRES_USER: medtrust_phase513c
+      POSTGRES_PASSWORD: phase513c_local_test_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medtrust_phase513c -d medtrust_phase513c_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - phase513c_postgres_test_data:/var/lib/postgresql/data
+
+volumes:
+  phase513c_postgres_test_data:
+    name: medtrust-phase513c-test_postgres_data

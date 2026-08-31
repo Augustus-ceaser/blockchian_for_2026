@@ -1,0 +1,27 @@
+:8080 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
+		-Server
+	}
+
+	@connectorIngress path /api/v1/connector-control/ingress/* /api/v1/policy-control/ingress/*
+	handle @connectorIngress {
+		respond 404
+	}
+
+	@api path /api/* /docs /openapi.json
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

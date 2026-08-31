@@ -1,0 +1,242 @@
+name: medtrust-public-alpha
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-backend-environment: &backend-environment
+  MEDTRUST_APP_ENV: production
+  MEDTRUST_DEBUG: "false"
+  MEDTRUST_DEPLOYMENT_MODE: ${MEDTRUST_DEPLOYMENT_MODE:?Set deployment mode}
+  MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Set public origin}
+  MEDTRUST_TRUSTED_ORIGINS: ${MEDTRUST_TRUSTED_ORIGINS:?Set trusted origins}
+  MEDTRUST_CORS_ORIGINS: ${MEDTRUST_CORS_ORIGINS:?Set CORS origins}
+  MEDTRUST_ALLOWED_HOSTS: ${MEDTRUST_ALLOWED_HOSTS:?Set allowed hosts}
+  MEDTRUST_TRUSTED_PROXY_IPS: ${MEDTRUST_TRUSTED_PROXY_IPS:-*}
+  MEDTRUST_GATEWAY_PORT: "8080"
+  MEDTRUST_DATABASE_URL_FILE: /run/secrets/database_url
+  MEDTRUST_DATABASE_ECHO: "false"
+  MEDTRUST_MINIO_ENDPOINT: minio:9000
+  MEDTRUST_MINIO_ACCESS_KEY_FILE: /run/secrets/minio_root_user
+  MEDTRUST_MINIO_SECRET_KEY_FILE: /run/secrets/minio_root_password
+  MEDTRUST_MINIO_SECURE: "false"
+  MEDTRUST_MINIO_RELEASE_BUCKET: medtrust-approved-results
+  MEDTRUST_MINIO_QUARANTINE_BUCKET: medtrust-quarantined-results
+  MEDTRUST_STORAGE_ROOT: /var/lib/medtrust/data
+  MEDTRUST_CACHE_ROOT: /var/cache/medtrust
+  MEDTRUST_POLICY_SIGNING_ROOT: /var/lib/medtrust/policy-signing
+  MEDTRUST_DEMO_API_ENABLED: "false"
+  MEDTRUST_ENABLE_DEMO_ROLE_SWITCH: "false"
+  MEDTRUST_OUTBOX_PUBLISHER: database_inbox
+  MEDTRUST_OUTBOX_BATCH_SIZE: "25"
+  MEDTRUST_OUTBOX_POLL_INTERVAL: "2"
+  MEDTRUST_SESSION_LIFETIME_SECONDS: ${MEDTRUST_SESSION_LIFETIME_SECONDS:-28800}
+  MEDTRUST_PASSWORD_MIN_LENGTH: ${MEDTRUST_PASSWORD_MIN_LENGTH:-14}
+  MEDTRUST_LOGIN_RATE_LIMIT_ATTEMPTS: ${MEDTRUST_LOGIN_RATE_LIMIT_ATTEMPTS:-5}
+  MEDTRUST_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${MEDTRUST_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+  MEDTRUST_DEMO_HOSPITAL_PASSWORD_FILE: /run/secrets/demo_hospital_password
+  MEDTRUST_DEMO_MODEL_PASSWORD_FILE: /run/secrets/demo_model_password
+  MEDTRUST_DEMO_REQUESTER_PASSWORD_FILE: /run/secrets/demo_requester_password
+  MEDTRUST_DEMO_OPERATOR_PASSWORD_FILE: /run/secrets/demo_operator_password
+  MEDTRUST_DEMO_CATALOG_CURATOR_PASSWORD_FILE: /run/secrets/demo_catalog_curator_password
+
+x-backend-common: &backend-common
+  image: ${MEDTRUST_BACKEND_IMAGE:-medtrust-space-backend:0.14.0-alpha}
+  build:
+    context: ../../backend
+  restart: unless-stopped
+  environment: *backend-environment
+  secrets:
+    - database_url
+    - minio_root_user
+    - minio_root_password
+    - demo_hospital_password
+    - demo_model_password
+    - demo_requester_password
+    - demo_operator_password
+    - demo_catalog_curator_password
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /var/cache/medtrust:size=128m,uid=10001,gid=10001,mode=0700
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 256
+  logging: *default-logging
+  networks:
+    - app_internal
+    - storage_internal
+
+services:
+  postgres:
+    image: postgres:16.9-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=60
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medtrust}
+      POSTGRES_USER: ${POSTGRES_USER:-medtrust}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 768m
+    cpus: 0.50
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    networks:
+      - storage_internal
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export MINIO_ROOT_USER="$$(cat /run/secrets/minio_root_user)"
+        export MINIO_ROOT_PASSWORD="$$(cat /run/secrets/minio_root_password)"
+        exec minio server /data
+    secrets:
+      - minio_root_user
+      - minio_root_password
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.40
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    networks:
+      - storage_internal
+
+  backend:
+    <<: *backend-common
+    command:
+      - /bin/sh
+      - -ec
+      - >
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+        --proxy-headers --forwarded-allow-ips "$${MEDTRUST_TRUSTED_PROXY_IPS}"
+    volumes:
+      - backend_storage:/var/lib/medtrust/data
+      - policy_signing:/var/lib/medtrust/policy-signing
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=4)"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    mem_limit: 768m
+    cpus: 0.65
+
+  dispatcher:
+    <<: *backend-common
+    command: ["python", "-m", "app.workers.outbox_dispatcher"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 128
+
+  gateway:
+    image: ${MEDTRUST_GATEWAY_IMAGE:-medtrust-space-gateway:0.14.0-alpha}
+    build:
+      context: ../..
+      dockerfile: gateway/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_DATA_MODE: api
+        VITE_ICP_NUMBER: ${ICP_NUMBER:-}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /config:size=8m,uid=10000,gid=10000,mode=0700
+      - /data:size=8m,uid=10000,gid=10000,mode=0700
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    mem_limit: 128m
+    cpus: 0.15
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *default-logging
+    networks:
+      - app_internal
+
+volumes:
+  postgres_data:
+  minio_data:
+  backend_storage:
+  policy_signing:
+
+networks:
+  app_internal:
+    internal: true
+  storage_internal:
+    internal: true
+
+secrets:
+  postgres_password:
+    file: /etc/medtrust/secrets/postgres_password
+  database_url:
+    file: /etc/medtrust/secrets/database_url
+  minio_root_user:
+    file: /etc/medtrust/secrets/minio_root_user
+  minio_root_password:
+    file: /etc/medtrust/secrets/minio_root_password
+  demo_hospital_password:
+    file: /etc/medtrust/secrets/demo_hospital_password
+  demo_model_password:
+    file: /etc/medtrust/secrets/demo_model_password
+  demo_requester_password:
+    file: /etc/medtrust/secrets/demo_requester_password
+  demo_operator_password:
+    file: /etc/medtrust/secrets/demo_operator_password
+  demo_catalog_curator_password:
+    file: /etc/medtrust/secrets/demo_catalog_curator_password

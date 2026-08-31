@@ -1,0 +1,24 @@
+{
+  "onboarding_profile": "pathmnist_public_v1",
+  "dataset_name": "PathMNIST official public test split",
+  "dataset_version": "v1",
+  "manifest_digest": "sha256:81823f52dc622e69db2db4c72f8e8e617938dd6864d3c1f23d4e49724a28ea72",
+  "data_type": "pathology_rgb_patch_28x28",
+  "input_schema_version": "pathmnist-rgb-28x28/v1",
+  "source_type": "public",
+  "public_or_authorized": "public",
+  "source_reference": "https://zenodo.org/records/10519652",
+  "license": "CC BY 4.0",
+  "split": "test",
+  "case_count": 7180,
+  "allowed_model_types": ["pathmnist_resnet18_v1"],
+  "authorized_use": ["model_validation"],
+  "enabled": true,
+  "non_clinical": true,
+  "contains_direct_identifiers": false,
+  "asset_locator": "registered://datasets/pathmnist/v1",
+  "array_schema": {
+    "images": {"key": "test_images", "shape": [7180, 28, 28, 3], "dtype": "uint8"},
+    "labels": {"key": "test_labels", "shape": [7180, 1], "dtype": "uint8"}
+  }
+}

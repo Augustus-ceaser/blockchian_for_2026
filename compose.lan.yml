@@ -1,0 +1,139 @@
+name: medtrust-space
+
+x-backend-environment: &backend-environment
+  MEDTRUST_DEPLOYMENT_MODE: lan-roadshow
+  MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Set MEDTRUST_PUBLIC_ORIGIN in the ignored LAN environment file}
+  MEDTRUST_TRUSTED_ORIGINS: ${MEDTRUST_PUBLIC_ORIGIN}
+  MEDTRUST_GATEWAY_PORT: ${MEDTRUST_GATEWAY_PORT:-8080}
+  MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+  MEDTRUST_MINIO_ENDPOINT: minio:9000
+  MEDTRUST_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-medtrust}
+  MEDTRUST_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+  MEDTRUST_MINIO_SECURE: "false"
+  MEDTRUST_DEMO_API_ENABLED: "true"
+  MEDTRUST_OUTBOX_PUBLISHER: database_inbox
+  MEDTRUST_DEMO_HOSPITAL_PASSWORD: ${MEDTRUST_DEMO_HOSPITAL_PASSWORD:-}
+  MEDTRUST_DEMO_MODEL_PASSWORD: ${MEDTRUST_DEMO_MODEL_PASSWORD:-}
+  MEDTRUST_DEMO_REQUESTER_PASSWORD: ${MEDTRUST_DEMO_REQUESTER_PASSWORD:-}
+  MEDTRUST_DEMO_OPERATOR_PASSWORD: ${MEDTRUST_DEMO_OPERATOR_PASSWORD:-}
+  MEDTRUST_DEMO_CATALOG_CURATOR_PASSWORD: ${MEDTRUST_DEMO_CATALOG_CURATOR_PASSWORD:-}
+  MEDTRUST_STORAGE_ROOT: /var/lib/medtrust/data
+  MEDTRUST_CACHE_ROOT: /var/cache/medtrust
+  MEDTRUST_EXTERNAL_CATALOG_BASE_URL: ${MEDTRUST_EXTERNAL_CATALOG_BASE_URL:-}
+  MEDTRUST_ALLOW_INSECURE_LOCAL_CATALOG: ${MEDTRUST_ALLOW_INSECURE_LOCAL_CATALOG:-false}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports: !reset []
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medtrust_phase4_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-medtrust}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medtrust_dev_only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    ports: !reset []
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-medtrust}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+    volumes:
+      - minio_data:/data
+
+  backend:
+    build: ./backend
+    ports: !reset []
+    environment: *backend-environment
+    volumes:
+      - ./registered_assets:/registered_assets:ro
+      - ${MEDTRUST_STORAGE_ROOT:-D:/MedTrustData}:/var/lib/medtrust/data
+      - ${MEDTRUST_CACHE_ROOT:-D:/MedTrustCache}:/var/cache/medtrust
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  dispatcher:
+    build: ./backend
+    command: python -m app.workers.outbox_dispatcher
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  callback:
+    build: ./backend
+    command: python -m app.workers.execution_callback_worker
+    environment:
+      <<: *backend-environment
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  coordinator:
+    image: ${MEDTRUST_COORDINATOR_IMAGE:-medtrust-space-coordinator:phase5.10}
+    environment:
+      <<: *backend-environment
+      MEDTRUST_EXECUTION_COORDINATOR_PATHMNIST: "true"
+      MEDTRUST_PATHMNIST_DATASET_PATH: /assets/pathmnist.npz
+      MEDTRUST_PATHMNIST_MODEL_PATH: /assets/resnet18_28_1.pth
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - ${MEDTRUST_PATHMNIST_DATASET_PATH:?Configure the fixed PathMNIST dataset}:/assets/pathmnist.npz:ro
+      - ${MEDTRUST_PATHMNIST_MODEL_PATH:?Configure the fixed PathMNIST model}:/assets/resnet18_28_1.pth:ro
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "${MEDTRUST_GATEWAY_BIND_IP:?Select a LAN IP}:${MEDTRUST_GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${MEDTRUST_POSTGRES_VOLUME_NAME:-medtrust-space_postgres_data}
+  minio_data:
+    external: true
+    name: ${MEDTRUST_MINIO_VOLUME_NAME:-medtrust-space_minio_data}
+  coordinator_workspaces:

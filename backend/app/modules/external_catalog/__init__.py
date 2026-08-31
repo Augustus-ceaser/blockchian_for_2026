@@ -1,0 +1,31 @@
+from app.modules.external_catalog.models import (
+    ExternalCatalogSource,
+    ExternalCatalogSyncRun,
+    ExternalDatasetRecord,
+    ExternalDatasetVersion,
+    ExternalDatasetGovernanceProfile,
+    ExternalDatasetGovernanceReview,
+    ExternalDatasetDuplicateResolution,
+    DataProductExternalSourceLink,
+    ExternalModelRecord,
+    ExternalModelVersion,
+    ExternalModelGovernanceProfile,
+    ExternalModelGovernanceReview,
+    ExternalModelFamilyResolution,
+)
+
+__all__ = [
+    "ExternalCatalogSource",
+    "ExternalCatalogSyncRun",
+    "ExternalDatasetRecord",
+    "ExternalDatasetVersion",
+    "ExternalDatasetGovernanceProfile",
+    "ExternalDatasetGovernanceReview",
+    "ExternalDatasetDuplicateResolution",
+    "DataProductExternalSourceLink",
+    "ExternalModelRecord",
+    "ExternalModelVersion",
+    "ExternalModelGovernanceProfile",
+    "ExternalModelGovernanceReview",
+    "ExternalModelFamilyResolution",
+]

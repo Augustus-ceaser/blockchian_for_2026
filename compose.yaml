@@ -1,0 +1,69 @@
+name: medtrust-space
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medtrust_phase4_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-medtrust}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medtrust_dev_only}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-medtrust}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+      MEDTRUST_MINIO_ENDPOINT: minio:9000
+      MEDTRUST_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-medtrust}
+      MEDTRUST_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+      MEDTRUST_MINIO_SECURE: "false"
+      MEDTRUST_STORAGE_ROOT: /var/lib/medtrust/data
+      MEDTRUST_CACHE_ROOT: /var/cache/medtrust
+      MEDTRUST_EXTERNAL_CATALOG_BASE_URL: ${MEDTRUST_EXTERNAL_CATALOG_BASE_URL:-}
+      MEDTRUST_EXTERNAL_MODEL_CATALOG_BASE_URL: ${MEDTRUST_EXTERNAL_MODEL_CATALOG_BASE_URL:-}
+      MEDTRUST_ALLOW_INSECURE_LOCAL_CATALOG: ${MEDTRUST_ALLOW_INSECURE_LOCAL_CATALOG:-false}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+      - ${MEDTRUST_STORAGE_ROOT:-D:/MedTrustData}:/var/lib/medtrust/data
+      - ${MEDTRUST_CACHE_ROOT:-D:/MedTrustCache}:/var/cache/medtrust
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${MEDTRUST_POSTGRES_VOLUME_NAME:-medtrust-space_postgres_data}
+  minio_data:
+    external: true
+    name: ${MEDTRUST_MINIO_VOLUME_NAME:-medtrust-space_minio_data}

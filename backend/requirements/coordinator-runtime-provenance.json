@@ -1,0 +1,21 @@
+{
+  "architecture": "amd64",
+  "base_image": "python:3.12.13-slim-bookworm",
+  "base_image_digest": "sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+  "cuda_available": false,
+  "hard_isolation": false,
+  "image_id": "sha256:3c26323fa51cc80da9459c1ef9e7f4fe1c7f9f36cab110d7388706e0d3060df1",
+  "image_size_bytes": 330581585,
+  "lock_sha256": "6a6e525615308a8eb1253386da12df7b00dfe4fedd1564d652b368bf36faee9d",
+  "manifest_sha256": "283b048f8c166459a4f95a15b5d73a670d8d8c397fe43fe21dcd6ea6e42be12c",
+  "numpy": "2.3.5",
+  "os": "linux",
+  "platform": "linux/amd64",
+  "psutil": "7.2.2",
+  "python": "3.12.13",
+  "runtime_user": "10001:10001",
+  "schema_version": "medtrust-coordinator-runtime-provenance/v1",
+  "torch": "2.13.0+cpu",
+  "torch_cuda": null,
+  "wheel_count": 40
+}

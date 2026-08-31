@@ -1,0 +1,11 @@
+plan_name: local-built-in-synthetic-self-test
+schema_version: "1"
+input_fixture: generated numeric values 1 through 10
+expected_outputs:
+  - metrics.json
+  - execution_summary.json
+expected_artifact_state: quarantined
+network_access: false
+external_release: false
+clinical_use: false
+cleanup_after_test: true

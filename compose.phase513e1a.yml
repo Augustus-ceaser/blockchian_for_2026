@@ -1,0 +1,144 @@
+name: medtrust-phase513e1a
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: medtrust_phase513d
+      POSTGRES_USER: medtrust_513d
+      POSTGRES_PASSWORD: ${PHASE513E1A_POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:55535:5432"
+    volumes:
+      - phase513e1a_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medtrust_513d -d medtrust_phase513d"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: medtrust_513d
+      MINIO_ROOT_PASSWORD: ${PHASE513E1A_MINIO_PASSWORD}
+    ports:
+      - "127.0.0.1:59300:9000"
+      - "127.0.0.1:59301:9001"
+    volumes:
+      - phase513e1a_minio:/data
+
+  backend:
+    image: medtrust-space-backend:latest
+    environment:
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://medtrust_513d:${PHASE513E1A_POSTGRES_PASSWORD}@postgres:5432/medtrust_phase513d
+      MEDTRUST_MINIO_ENDPOINT: minio:9000
+      MEDTRUST_MINIO_ACCESS_KEY: medtrust_513d
+      MEDTRUST_MINIO_SECRET_KEY: ${PHASE513E1A_MINIO_PASSWORD}
+      MEDTRUST_MINIO_SECURE: "false"
+      MEDTRUST_DEMO_API_ENABLED: "true"
+      MEDTRUST_CORS_ORIGINS: http://127.0.0.1:58280
+      MEDTRUST_TRUSTED_ORIGINS: http://127.0.0.1:58280
+      MEDTRUST_DEMO_HOSPITAL_PASSWORD: ${PHASE513E1A_HOSPITAL_PASSWORD}
+      MEDTRUST_DEMO_MODEL_PASSWORD: ${PHASE513E1A_MODEL_PASSWORD}
+      MEDTRUST_DEMO_REQUESTER_PASSWORD: ${PHASE513E1A_REQUESTER_PASSWORD}
+      MEDTRUST_DEMO_OPERATOR_PASSWORD: ${PHASE513E1A_OPERATOR_PASSWORD}
+      MEDTRUST_DEMO_CATALOG_CURATOR_PASSWORD: ${PHASE513E1A_CATALOG_CURATOR_PASSWORD}
+      MEDTRUST_CONNECTOR_PKI_ROOT: /var/lib/medtrust/connector-pki
+      MEDTRUST_POLICY_SIGNING_ROOT: /var/lib/medtrust/policy-signing
+      MEDTRUST_OPENSSL: /usr/bin/openssl
+    ports:
+      - "127.0.0.1:58200:8000"
+    volumes:
+      - ./backend:/app
+      - ./registered_assets:/registered_assets:ro
+      - ${PHASE513E1A_PKI_ROOT}:/var/lib/medtrust/connector-pki
+      - ${PHASE513E1A_POLICY_SIGNING_ROOT}:/var/lib/medtrust/policy-signing
+      - ${PHASE513E1A_STORAGE_ROOT}:/var/lib/medtrust/data
+      - ${PHASE513E1A_CACHE_ROOT}:/var/cache/medtrust
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "127.0.0.1:58280:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  connector-ingress:
+    image: nginx:1.27-alpine
+    ports:
+      - "127.0.0.1:58643:8443"
+    volumes:
+      - ${PHASE513E1A_PKI_ROOT}:/pki:ro
+      - ./hospital-connector/nginx/connector-ingress-a1.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  hospital-connector:
+    build:
+      context: .
+      dockerfile: hospital-connector/Dockerfile
+    ports:
+      - "127.0.0.1:58800:18600"
+    environment:
+      CONNECTOR_DATA_ROOT: /var/lib/medtrust-connector
+      CONNECTOR_CENTRAL_URL: http://backend:8000/api/v1/connector-control
+      CONNECTOR_INGRESS_URL: https://connector-ingress:8443/api/v1/connector-control/ingress
+      CONNECTOR_CA_CERT: /pki/local-test-ca.cert.pem
+      CONNECTOR_LOCAL_CURATOR_PASSWORD: ${PHASE513E1A_LOCAL_CURATOR_PASSWORD}
+      CONNECTOR_LOCAL_REVIEWER_PASSWORD: ${PHASE513E1A_LOCAL_REVIEWER_PASSWORD}
+      CONNECTOR_LOCAL_POLICY_REVIEWER_PASSWORD: ${PHASE513E1A_LOCAL_POLICY_REVIEWER_PASSWORD}
+      CONNECTOR_LOCAL_ADMIN_PASSWORD: ${PHASE513E1A_LOCAL_ADMIN_PASSWORD}
+      CONNECTOR_LOCAL_COOKIE_SECURE: "false"
+      CONNECTOR_FIXED_EXECUTION_IMAGE_DIGEST: sha256:3c26323fa51cc80da9459c1ef9e7f4fe1c7f9f36cab110d7388706e0d3060df1
+    volumes:
+      - ${PHASE513E1A_CONNECTOR_ROOT}:/var/lib/medtrust-connector
+      - ${PHASE513E1A_PKI_ROOT}:/pki:ro
+    depends_on:
+      - connector-ingress
+
+  hospital-executor:
+    image: medtrust-space-coordinator@sha256:3c26323fa51cc80da9459c1ef9e7f4fe1c7f9f36cab110d7388706e0d3060df1
+    entrypoint: ["python", "/fixed-worker/fixed_reference_worker.py"]
+    network_mode: none
+    read_only: true
+    user: "10001:10001"
+    environment:
+      MEDTRUST_FIXED_RUNTIME_ROOT: /runtime-sandboxes
+      MEDTRUST_FIXED_EXECUTION_IMAGE_DIGEST: sha256:3c26323fa51cc80da9459c1ef9e7f4fe1c7f9f36cab110d7388706e0d3060df1
+    volumes:
+      - ./hospital-executor:/fixed-worker:ro
+      - ${PHASE513E1A_CONNECTOR_ROOT}/runtime-sandboxes:/runtime-sandboxes
+      - D:/MedTrustAssets/pathmnist_smoke/data:/assets/data:ro
+      - D:/MedTrustAssets/pathmnist_smoke/model:/assets/model:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 2304m
+    cpus: 2.0
+    restart: "no"
+
+volumes:
+  phase513e1a_postgres:
+    name: medtrust-phase513e1a_postgres_data
+  phase513e1a_minio:
+    name: medtrust-phase513e1a_minio_data

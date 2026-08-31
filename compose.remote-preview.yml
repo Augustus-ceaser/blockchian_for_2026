@@ -1,0 +1,84 @@
+name: medtrust-space-remote-preview
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medtrust_phase4_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-medtrust}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medtrust_dev_only}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-medtrust}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+    volumes: [minio_data:/data]
+  backend:
+    build: ./backend
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: remote-preview
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Configure the protected HTTPS origin}
+      MEDTRUST_TRUSTED_ORIGINS: ${MEDTRUST_PUBLIC_ORIGIN}
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+      MEDTRUST_MINIO_ENDPOINT: minio:9000
+      MEDTRUST_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-medtrust}
+      MEDTRUST_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+      MEDTRUST_DEMO_API_ENABLED: "true"
+      MEDTRUST_OUTBOX_PUBLISHER: database_inbox
+  dispatcher:
+    build: ./backend
+    command: python -m app.workers.outbox_dispatcher
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: remote-preview
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Configure the protected HTTPS origin}
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+      MEDTRUST_OUTBOX_PUBLISHER: database_inbox
+    depends_on: [backend]
+  coordinator:
+    image: ${MEDTRUST_COORDINATOR_IMAGE:-medtrust-space-coordinator:phase5.10}
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: remote-preview
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Configure the protected HTTPS origin}
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+      MEDTRUST_EXECUTION_COORDINATOR_PATHMNIST: "true"
+      MEDTRUST_PATHMNIST_DATASET_PATH: /assets/pathmnist.npz
+      MEDTRUST_PATHMNIST_MODEL_PATH: /assets/resnet18_28_1.pth
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - ${MEDTRUST_PATHMNIST_DATASET_PATH:?Configure the fixed PathMNIST dataset}:/assets/pathmnist.npz:ro
+      - ${MEDTRUST_PATHMNIST_MODEL_PATH:?Configure the fixed PathMNIST model}:/assets/resnet18_28_1.pth:ro
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+    depends_on: [backend]
+  callback:
+    build: ./backend
+    command: python -m app.workers.execution_callback_worker
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: remote-preview
+      MEDTRUST_PUBLIC_ORIGIN: ${MEDTRUST_PUBLIC_ORIGIN:?Configure the protected HTTPS origin}
+      MEDTRUST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-medtrust}:${POSTGRES_PASSWORD:-medtrust_dev_only}@postgres:5432/${POSTGRES_DB:-medtrust_phase4_demo}
+      MEDTRUST_MINIO_ENDPOINT: minio:9000
+      MEDTRUST_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-medtrust}
+      MEDTRUST_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-medtrust_dev_only}
+      MEDTRUST_MINIO_SECURE: "false"
+      MEDTRUST_LOCAL_EXECUTOR_WORKSPACE: /var/lib/medtrust/workspaces
+    volumes:
+      - coordinator_workspaces:/var/lib/medtrust/workspaces
+    depends_on: [backend, minio]
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "127.0.0.1:${MEDTRUST_GATEWAY_PORT:-8080}:8080"
+    depends_on: [backend]
+
+volumes:
+  postgres_data:
+    external: true
+    name: medtrust-space_postgres_data
+  minio_data:
+    external: true
+    name: medtrust-space_minio_data
+  coordinator_workspaces:

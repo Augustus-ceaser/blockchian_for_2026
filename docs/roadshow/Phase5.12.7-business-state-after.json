@@ -1,0 +1,192 @@
+{
+  "alembic_head": "20260728_0049",
+  "audit": {
+    "chain_valid": true,
+    "head_digest": "sha256:75b9b969d8a3d81f65aab15c5fbfa8ab3b6c805581624cc0cac602332db7e866",
+    "head_event_type": "dataset_model_relation.status_changed",
+    "head_occurred_at": "2026-07-28T00:32:52.463245+00:00",
+    "head_sequence": 353,
+    "invalid_sequence": null,
+    "reason": null
+  },
+  "boundaries": {
+    "clinical_use": false,
+    "external_data_materialized": false,
+    "external_executor_registered": false,
+    "external_model_materialized": false,
+    "hard_isolation": false
+  },
+  "canonical_storage_identity": {
+    "minio_volume": "medtrust-space_minio_data",
+    "postgres_volume": "medtrust-space_postgres_data"
+  },
+  "counts": {
+    "applications": 3,
+    "artifacts": 2,
+    "audit_events": 353,
+    "compute_jobs": 3,
+    "compute_runs": 2,
+    "contracts": 3,
+    "data_products": 7,
+    "dataset_governance_profiles": 982,
+    "dataset_governance_reviews": 80,
+    "download_grants": 2,
+    "evidences": 8,
+    "external_dataset_records": 982,
+    "external_dataset_versions": 982,
+    "external_model_records": 16,
+    "external_model_versions": 16,
+    "materialization_plans": 0,
+    "model_governance_profiles": 16,
+    "model_governance_reviews": 96,
+    "model_products": 4,
+    "relations": 7,
+    "release_packages": 2
+  },
+  "external_models": [
+    {
+      "entrypoint_id": "external-metadata-only",
+      "execution_status": "not_materialized",
+      "gated": true,
+      "lifecycle_status": "active",
+      "name": "CONCH",
+      "product_code": "EXT-MP-AC887C58A0",
+      "runtime": "external_metadata_only",
+      "weights_status": "gated"
+    },
+    {
+      "entrypoint_id": "external-metadata-only",
+      "execution_status": "not_materialized",
+      "gated": true,
+      "lifecycle_status": "active",
+      "name": "UNI",
+      "product_code": "EXT-MP-AB7E9193C7",
+      "runtime": "external_metadata_only",
+      "weights_status": "gated"
+    }
+  ],
+  "reference_relation": {
+    "created_at": "2026-07-28T00:32:52.427793+00:00",
+    "current_status": "verified",
+    "data_name": "结直肠组织病理分类数据产品（公开验证）",
+    "data_product_version_id": "c1aba304-9572-5af5-bd37-c8e737857746",
+    "evidence_reference": {
+      "application_id": "9291e1ed-af45-5786-8036-e16e66abb4b8",
+      "artifact_id": "c79aa0bb-b0cd-4fb2-a80f-06d7281a7c1c",
+      "audit_chain_last_digest": "sha256:63706dbd17fa4bfc4ec7a8b9c022a66e0eaeb23da6381a39ac04489350bc8e13",
+      "audit_chain_last_sequence": 350,
+      "completion_callback_id": "b2992be1-0966-4122-8033-c499ef84de59",
+      "compute_job_id": "d800fffd-1581-4a61-b88b-9f5fa4081020",
+      "compute_run_id": "e8c997ae-90f7-44d7-955a-6fa169cc9a7b",
+      "contract_id": "b36ccb56-9ec3-52c3-a872-2db3540a680c",
+      "download_grant_id": "ffaab076-1d50-4562-b6e8-d8b0e865cbb7",
+      "result_package_id": "cbe04697-376b-4de8-b58a-18643037851e"
+    },
+    "id": "df7ec70c-f4cb-5df7-842d-bf2af6d66961",
+    "model_name": "PathMNIST ResNet-18病理分类模型",
+    "model_product_version_id": "14942c18-c38a-5e35-b3cf-ced2e14b5062",
+    "strongest_evidence_level": "platform_verification",
+    "structured_assessment": {
+      "aggregate_metrics": {
+        "accuracy": "0.95",
+        "mean_confidence": "0.960102856159"
+      },
+      "correct_count": 19,
+      "duration_seconds": "8.32171",
+      "executor_adapter": "local-builtin",
+      "failure_count": 0,
+      "finished_at": "2026-07-26T04:19:05.373093+00:00",
+      "limitations": [
+        "Fixed 20-image PathMNIST demonstration subset only.",
+        "Engineering workflow verification; non-clinical.",
+        "Does not represent full-dataset or diagnostic performance.",
+        "hard_isolation=false prototype execution boundary."
+      ],
+      "platform_verification": {
+        "artifact_id": "c79aa0bb-b0cd-4fb2-a80f-06d7281a7c1c",
+        "artifact_status": "quarantined",
+        "audit_chain_last_digest": "sha256:63706dbd17fa4bfc4ec7a8b9c022a66e0eaeb23da6381a39ac04489350bc8e13",
+        "audit_chain_last_sequence": 350,
+        "audit_chain_valid": true,
+        "download_grant_id": "ffaab076-1d50-4562-b6e8-d8b0e865cbb7",
+        "executed_evidence_id": "6acbdf33-5bc7-55d6-aa10-24c60c81475a",
+        "one_time_download": {
+          "status": "exhausted",
+          "usage": "1/1"
+        },
+        "package_digest": "sha256:5fde87bf7518822990926e427fc87f019e0abeb4660ef68083edce7ef7830005",
+        "package_files": [
+          {
+            "digest": "sha256:34a5b5acc62889e8f492ecb886e4a75245a6e3f00353a9bf5079ddedc54f2605",
+            "name": "aggregate_metrics.json",
+            "size_bytes": 417
+          },
+          {
+            "digest": "sha256:4f4b57502a4bc4fceba24b160cbb3652fa869ac44ac7a0dec900adfc360ddf3e",
+            "name": "confusion_matrix.csv",
+            "size_bytes": 461
+          },
+          {
+            "digest": "sha256:f2033a9d2fbfc6e0ce6936160eb8fadee3a8fece07036ee3c8a24c1313f240ff",
+            "name": "execution_summary.json",
+            "size_bytes": 967
+          }
+        ],
+        "result_package_id": "cbe04697-376b-4de8-b58a-18643037851e",
+        "review_decision_digests": [
+          "sha256:42d80e41952078cc1aab3b6e34759d7e80a526944d8ea009e9313e6307645e42",
+          "sha256:955e9b1f8cb7b97fd571adc952c556fad7b747775e6351fe80c14d9fe0a4997c",
+          "sha256:fbb09b4444db9233bf1fe5ff97aaa49cfe697589e62c2e859ff9410133c0a148"
+        ],
+        "review_ids": [
+          "4a8e0b70-c636-4dfd-9e22-18e4954728df",
+          "799896dc-01a9-454a-b759-fa31effa63d2",
+          "4a7cefa6-ebca-4e15-afcf-2e6ef4cc08e0"
+        ],
+        "review_status": "3/3 approved",
+        "verified_at": "2026-07-28T00:32:52.427241+00:00"
+      },
+      "resource_usage": {
+        "device": "cpu",
+        "hard_isolation": false,
+        "inference_seconds": "0.199145318009",
+        "peak_rss_mb": "438.56640625",
+        "rss_after_mb": "438.56640625",
+        "rss_before_mb": "420.44140625",
+        "torch_threads": 1
+      },
+      "result_artifact_id": "c79aa0bb-b0cd-4fb2-a80f-06d7281a7c1c",
+      "sample_count": 20,
+      "software_environment_digest": "sha256:fd4303561d621ecbb0f0f7f92cfd3b12afdeb85ec11d5f787d4249373070ee60",
+      "started_at": "2026-07-26T04:18:57.051383+00:00",
+      "success_count": 20
+    }
+  },
+  "schema_version": "phase5.12.7/business-state/v1",
+  "status_counts": {
+    "approved_materialization_plans": 0,
+    "archived_external_data_products": 1,
+    "draft_external_data_products": 3,
+    "draft_external_model_products": 1,
+    "executed_evidences": 1,
+    "execution_failed_evidences": 0,
+    "external_model_executors": 0,
+    "materialized_external_models": 0,
+    "published_external_data_products": 3,
+    "published_external_model_products": 2,
+    "static_incompatible_relations": 2,
+    "static_transformation_relations": 4,
+    "verified_evidences": 1
+  },
+  "storage": {
+    "bucket_object_counts": {
+      "medtrust-approved-results": 2,
+      "medtrust-phase4-approved-results": 1,
+      "medtrust-phase56-quarantined-results": 9,
+      "medtrust-phase56-test-quarantine": 0,
+      "medtrust-phase57-test-results": 12,
+      "medtrust-quarantined-results": 6
+    },
+    "object_count": 30
+  }
+}

@@ -1,0 +1,17 @@
+model_name: platform synthetic statistics self-test
+model_version: "1.0"
+model_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+entrypoint_id: builtin.synthetic_statistics.v1
+runtime: python-built-in
+dependency_lock_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+input_schema_version: synthetic-numeric-array/v1
+output_schema_version: synthetic-statistics/v1
+allowed_output_types:
+  - model_artifact
+network_access: false
+cpu_limit: 1
+memory_limit: 512
+timeout_seconds: 30
+enabled: true
+source_declaration: platform synthetic self-test
+non_clinical: true

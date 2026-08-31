@@ -1,0 +1,59 @@
+services:
+  backend:
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: public-alpha
+      MEDTRUST_PUBLIC_ORIGIN: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_TRUSTED_ORIGINS: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_CORS_ORIGINS: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_ALLOWED_HOSTS: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval},gateway
+
+  dispatcher:
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: public-alpha
+      MEDTRUST_PUBLIC_ORIGIN: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_TRUSTED_ORIGINS: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_CORS_ORIGINS: https://${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      MEDTRUST_ALLOWED_HOSTS: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval},gateway
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN after ICP approval}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-0}
+      ACME_EMAIL: ${ACME_EMAIL:-off}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.template:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.15
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - public_edge
+      - app_internal
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  public_edge:

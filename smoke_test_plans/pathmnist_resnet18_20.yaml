@@ -1,0 +1,47 @@
+schema_version: pathmnist-controlled-smoke-plan/v1
+plan_id: pathmnist-resnet18-official-test-20
+dataset_locator: registered://datasets/pathmnist/v1
+model_locator: registered://models/pathmnist-resnet18/v1
+split: test
+sample_count: 20
+selection_method: fixed-indices
+selection_seed: 20260723
+test_indices:
+  - 126
+  - 345
+  - 449
+  - 561
+  - 670
+  - 1296
+  - 2416
+  - 2920
+  - 3085
+  - 3500
+  - 3513
+  - 4188
+  - 4444
+  - 5047
+  - 5090
+  - 5278
+  - 5439
+  - 5642
+  - 5770
+  - 6108
+device: cpu
+network_access: false
+inference_only: true
+timeout_seconds: 120
+memory_limit_mb: 2048
+expected_outputs:
+  - aggregate_metrics.json
+  - confusion_matrix.csv
+  - execution_summary.json
+prohibited_outputs:
+  - raw_images
+  - patient_level_results
+  - model_weights
+  - raw_features
+  - download_link
+external_release: false
+artifact_initial_state: quarantined
+non_clinical: true

@@ -1,0 +1,26 @@
+services:
+  backend:
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: pre-icp
+      MEDTRUST_PUBLIC_ORIGIN: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_TRUSTED_ORIGINS: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_CORS_ORIGINS: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_ALLOWED_HOSTS: 127.0.0.1,localhost,gateway
+
+  dispatcher:
+    environment:
+      MEDTRUST_DEPLOYMENT_MODE: pre-icp
+      MEDTRUST_PUBLIC_ORIGIN: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_TRUSTED_ORIGINS: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_CORS_ORIGINS: http://127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}
+      MEDTRUST_ALLOWED_HOSTS: 127.0.0.1,localhost,gateway
+
+  gateway:
+    ports:
+      - "127.0.0.1:${PRE_ICP_ENTRY_PORT:-18080}:8080"
+    networks:
+      - app_internal
+      - pre_icp_edge
+
+networks:
+  pre_icp_edge:

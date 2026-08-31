@@ -1,0 +1,15 @@
+{
+  "dataset_name": "platform synthetic numeric fixture",
+  "dataset_version": "1.0",
+  "manifest_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "data_type": "synthetic_numeric_array",
+  "input_schema_version": "synthetic-numeric-array/v1",
+  "source_type": "synthetic_fixture",
+  "public_or_authorized": "synthetic",
+  "case_count": 10,
+  "allowed_model_types": ["builtin.synthetic_statistics.v1"],
+  "authorized_use": ["ai_training"],
+  "enabled": true,
+  "authorization_declaration": "synthetic fixture only",
+  "non_clinical": true
+}

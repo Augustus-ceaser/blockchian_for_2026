@@ -1,0 +1,70 @@
+# Python backend
+backend/.env
+backend/.env.local
+backend/.venv/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/*.egg-info/
+backend/*.sql
+backend/**/__pycache__/
+backend/**/*.py[cod]
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+**/node_modules/
+**/puppeteer_dev_chrome_profile*/
+
+# Local tooling
+.runtime/
+/.agents/
+/.planning/
+/.deploy/
+/.tmp/
+/work/
+/video-output/
+config/phase4-demo.env
+config/phase4-demo.local.env
+config/.secrets/
+config/hospital-connector-alpha.env
+config/phase513c-a1.env
+config/phase513d.env
+config/phase513e1a.env
+config/phase513e2cr.env
+config/lan-roadshow.local.env
+config/ROADSHOW-CREDENTIALS.local.txt
+config/remote-preview.local.yml
+.runtime/lan-roadshow*
+.runtime/remote-preview*
+.deploy/tencent-gz.local.ps1
+.idea/
+.vscode/
+*.log
+
+# Credentials and machine-local state
+**/.env
+**/.env.*
+!**/.env.example
+!**/*.example.env
+**/.secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.bak
+
+# Local database snapshots and generated verification exports
+tmp/*
+!tmp/pathmnist-controlled-smoke-authoritative-20260723.json
+.cache/
+__pycache__/
+*.py[cod]
+
+# Generated local asset-materialization evidence
+/registered_assets/orthopedic_first_batch_v1/
