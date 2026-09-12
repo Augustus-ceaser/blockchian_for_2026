@@ -862,26 +862,6 @@ async def pay_commercial_order(
             )
         ).all()
     )
-    if order.source_type == "contract":
-        kind = "execution_entitlement"
-        line_id = None
-        contract_id = order.contract_id
-    else:
-        if len(lines) != 1:
-            raise CommerceError("service delivery order must have exactly one line")
-        kind = (
-            "data_document_package"
-            if lines[0].product_kind == "data"
-            else "model_license_package"
-        )
-        try:
-            automatic_delivery_profile(
-                kind=kind, version_id=str(lines[0].version_id)
-            )
-        except ValueError as exc:
-            raise CommerceError(str(exc)) from exc
-        line_id = lines[0].id
-        contract_id = None
     payment_document = {
         "schema_version": "medtrust.local-demo-payment/v1",
         "order_id": str(order.id),
@@ -948,64 +928,19 @@ async def pay_commercial_order(
     order.row_version += 1
     order._transition_validated = True
 
-    entitled_products = [
-        {
-            "order_line_id": str(line.id),
-            "product_kind": line.product_kind,
-            "product_id": str(line.product_id),
-            "product_name": line.product_name,
-            "version_id": str(line.version_id),
-            "provider_organization_id": str(line.provider_organization_id),
-            "service_mode": line.service_mode,
-            "offer_digest": line.offer_digest,
-            "contract_selected_version_id": line.offer_snapshot.get(
-                "contract_selected_version_id"
-            ),
-        }
-        for line in lines
+    fulfillment = await create_commercial_fulfillment_after_verified_payment(
+        session,
+        order=order,
+        lines=lines,
+        payment_receipt_digest=payment.receipt_digest,
+        now=now,
+    )
+    entitled_products = fulfillment.entitlement_snapshot["entitled_products"]
+    authorized_duration_days = fulfillment.entitlement_snapshot[
+        "authorized_duration_days"
     ]
-    authorized_duration_days = order.agreement_snapshot.get(
-        "requested_duration_days"
-    )
-    if authorized_duration_days is None and len(lines) == 1:
-        authorized_duration_days = lines[0].offer_snapshot.get("validity_days")
-    fulfillment_id = uuid5(
-        NAMESPACE_URL, f"medtrust:commercial-fulfillment:{order.id}:{kind}"
-    )
-    entitlement = {
-        "schema_version": "medtrust.commercial-entitlement/v1",
-        "fulfillment_id": str(fulfillment_id),
-        "order_id": str(order.id),
-        "order_number": order.order_number,
-        "kind": kind,
-        "status": "ready",
-        "contract_id": str(contract_id) if contract_id else None,
-        "quote_digest": order.quote_digest,
-        "agreement_digest": order.agreement_digest,
-        "payment_receipt_digest": payment.receipt_digest,
-        "entitled_products": entitled_products,
-        "authorized_duration_days": authorized_duration_days,
-        "download_boundary": (
-            "not_downloadable_execute_under_active_contract"
-            if kind == "execution_entitlement"
-            else "fixed_allowlisted_documentation_zip_only"
-        ),
-        "raw_patient_data_included": False,
-        "model_weights_included": False,
-    }
-    fulfillment = CommercialFulfillment(
-        id=fulfillment_id,
-        space_id=order.space_id,
-        order_id=order.id,
-        order_line_id=line_id,
-        kind=kind,
-        status="ready",
-        contract_id=contract_id,
-        entitlement_snapshot=entitlement,
-        entitlement_digest=canonical_json_digest_v1(entitlement),
-        created_at=now,
-    )
-    session.add(fulfillment)
+    kind = fulfillment.kind
+    contract_id = fulfillment.contract_id
     await session.flush([order, payment, fulfillment])
     appended = await append_audit_event_with_outbox(
         session,
@@ -1058,6 +993,128 @@ async def pay_commercial_order(
         **fulfillment_command.append_kwargs(),
     )
     return order, payment, fulfillment, appended.event
+
+
+async def create_commercial_fulfillment_after_verified_payment(
+    session: AsyncSession,
+    *,
+    order: CommercialOrder,
+    lines: list[CommercialOrderLine],
+    payment_receipt_digest: str,
+    now: datetime | None = None,
+) -> CommercialFulfillment:
+    """Create the existing immutable entitlement from verified payment evidence.
+
+    The caller owns payment verification and the legal order transition.  The
+    digest may identify either a local-demo payment receipt or a finalized EVM
+    escrow receipt; this function never fabricates one payment type as another.
+    """
+
+    if not (
+        isinstance(payment_receipt_digest, str)
+        and len(payment_receipt_digest) == 71
+        and payment_receipt_digest.startswith("sha256:")
+    ):
+        raise CommerceError("verified payment receipt digest is invalid")
+    if order.status != "paid":
+        raise CommerceError("commercial order must be paid before fulfillment")
+    if order.source_type == "contract":
+        if order.contract_id is None or len(lines) != 2:
+            raise CommerceError(
+                "controlled-compute fulfillment requires one data and one model line"
+            )
+        if {line.product_kind for line in lines} != {"data", "model"}:
+            raise CommerceError(
+                "controlled-compute fulfillment requires one data and one model line"
+            )
+        kind = "execution_entitlement"
+        line_id = None
+        contract_id = order.contract_id
+    else:
+        if len(lines) != 1:
+            raise CommerceError("service delivery order must have exactly one line")
+        kind = (
+            "data_document_package"
+            if lines[0].product_kind == "data"
+            else "model_license_package"
+        )
+        try:
+            automatic_delivery_profile(kind=kind, version_id=str(lines[0].version_id))
+        except ValueError as exc:
+            raise CommerceError(str(exc)) from exc
+        line_id = lines[0].id
+        contract_id = None
+
+    fulfillment_id = uuid5(
+        NAMESPACE_URL, f"medtrust:commercial-fulfillment:{order.id}:{kind}"
+    )
+    existing = await session.get(CommercialFulfillment, fulfillment_id)
+    if existing is not None:
+        if (
+            existing.order_id == order.id
+            and existing.kind == kind
+            and existing.entitlement_snapshot.get("payment_receipt_digest")
+            == payment_receipt_digest
+        ):
+            return existing
+        raise CommerceError("commercial fulfillment already exists with other evidence")
+
+    entitled_products = [
+        {
+            "order_line_id": str(line.id),
+            "product_kind": line.product_kind,
+            "product_id": str(line.product_id),
+            "product_name": line.product_name,
+            "version_id": str(line.version_id),
+            "provider_organization_id": str(line.provider_organization_id),
+            "service_mode": line.service_mode,
+            "offer_digest": line.offer_digest,
+            "contract_selected_version_id": line.offer_snapshot.get(
+                "contract_selected_version_id"
+            ),
+        }
+        for line in lines
+    ]
+    authorized_duration_days = order.agreement_snapshot.get(
+        "requested_duration_days"
+    )
+    if authorized_duration_days is None and len(lines) == 1:
+        authorized_duration_days = lines[0].offer_snapshot.get("validity_days")
+    entitlement = {
+        "schema_version": "medtrust.commercial-entitlement/v1",
+        "fulfillment_id": str(fulfillment_id),
+        "order_id": str(order.id),
+        "order_number": order.order_number,
+        "kind": kind,
+        "status": "ready",
+        "contract_id": str(contract_id) if contract_id else None,
+        "quote_digest": order.quote_digest,
+        "agreement_digest": order.agreement_digest,
+        "payment_receipt_digest": payment_receipt_digest,
+        "entitled_products": entitled_products,
+        "authorized_duration_days": authorized_duration_days,
+        "download_boundary": (
+            "not_downloadable_execute_under_active_contract"
+            if kind == "execution_entitlement"
+            else "fixed_allowlisted_documentation_zip_only"
+        ),
+        "raw_patient_data_included": False,
+        "model_weights_included": False,
+    }
+    fulfillment = CommercialFulfillment(
+        id=fulfillment_id,
+        space_id=order.space_id,
+        order_id=order.id,
+        order_line_id=line_id,
+        kind=kind,
+        status="ready",
+        contract_id=contract_id,
+        entitlement_snapshot=entitlement,
+        entitlement_digest=canonical_json_digest_v1(entitlement),
+        created_at=now or _now(),
+    )
+    session.add(fulfillment)
+    return fulfillment
 
 
 def _grant_token(*, grant_id: UUID, raw_key: str) -> str:

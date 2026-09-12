@@ -17,6 +17,7 @@ from app.execution.registry import ModelRegistration, ModelRegistry
 from app.modules.audit import AuditCommandContext, append_audit_event_with_outbox
 from app.modules.audit.services import canonical_json_digest_v1
 from app.modules.compute.models import Artifact, ComputeJob, ComputeRun
+from app.modules.commerce.models import CommercialOrder
 from app.modules.connectors.models import Connector, ConnectorCapability
 from app.modules.contracts.models import (
     Contract,
@@ -27,6 +28,7 @@ from app.modules.contracts.models import (
 )
 from app.modules.identity.models import Organization, OrganizationMember, User
 from app.modules.spaces.models import Space, SpaceParticipant, SpaceParticipantRole
+from app.modules.web3.models import Web3EscrowBinding
 
 from .models import (
     SAFE_RESULT_FILENAMES,
@@ -920,6 +922,46 @@ class DownloadGrantSecret:
     token: str
 
 
+async def _require_web3_result_delivery_unlocked(
+    session: AsyncSession, package: ApprovedResultPackage
+) -> None:
+    """Gate result delivery only when this contract uses Web3 escrow.
+
+    Legacy/demo-payment workflows remain unchanged. For a Web3-funded contract,
+    the approved package can serve as delivery evidence while quarantined, but
+    a requester download grant is unlocked only after canonical settlement.
+    """
+
+    artifact = await session.get(Artifact, package.artifact_id)
+    run = None if artifact is None else await session.get(
+        ComputeRun, artifact.compute_run_id
+    )
+    job = None if run is None else await session.get(ComputeJob, run.compute_job_id)
+    if artifact is None or run is None or job is None:
+        raise MarketplaceServiceError("result package execution lineage is incomplete")
+    order = await session.scalar(
+        select(CommercialOrder).where(
+            CommercialOrder.space_id == package.space_id,
+            CommercialOrder.contract_id == job.contract_id,
+            CommercialOrder.requester_organization_id
+            == package.requester_organization_id,
+            CommercialOrder.source_type == "contract",
+        )
+    )
+    if order is None:
+        return
+    escrow = await session.scalar(
+        select(Web3EscrowBinding).where(
+            Web3EscrowBinding.space_id == package.space_id,
+            Web3EscrowBinding.commercial_order_id == order.id,
+        )
+    )
+    if escrow is not None and escrow.status != "claimable":
+        raise MarketplaceServiceError(
+            "Web3 托管尚未完成双证明结算，结果交付授权暂未解锁"
+        )
+
+
 async def create_download_grant(
     session: AsyncSession,
     package: ApprovedResultPackage,
@@ -932,6 +974,7 @@ async def create_download_grant(
 ) -> DownloadGrantSecret:
     if package.status != "available" or package.requester_organization_id != requester_organization_id:
         raise MarketplaceServiceError("result package is not available to this requester")
+    await _require_web3_result_delivery_unlocked(session, package)
     await require_actor(
         session,
         space_id=package.space_id,
@@ -1025,6 +1068,7 @@ async def consume_download_grant(
     package = await session.get(ApprovedResultPackage, grant.result_package_id)
     if package is None or package.status != "available":
         raise MarketplaceServiceError("result package is unavailable")
+    await _require_web3_result_delivery_unlocked(session, package)
     payload = object_store.get(package.object_key)
     if content_digest(payload) != package.package_digest:
         raise MarketplaceServiceError("release package digest mismatch")

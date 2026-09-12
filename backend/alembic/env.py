@@ -29,6 +29,7 @@ from app.modules.reviews import models as review_models  # noqa: F401
 from app.modules.role_assistant import models as role_assistant_models  # noqa: F401
 from app.modules.service_access import models as service_access_models  # noqa: F401
 from app.modules.commerce import models as commerce_models  # noqa: F401
+from app.modules.web3 import models as web3_models  # noqa: F401
 from app.modules.spaces import models as space_models  # noqa: F401
 
 config = context.config

@@ -20,6 +20,7 @@ PYTHON_VERSION = "3.12.13"
 DIRECT = {
     "alembic",
     "asyncpg",
+    "eth-account",
     "fastapi",
     "minio",
     "numpy",
@@ -95,7 +96,7 @@ def validate_tags(filename: str, tags: frozenset[Tag]) -> None:
         if tag.interpreter == "cp312":
             if tag.abi not in {"cp312", "abi3"}:
                 raise ValueError(f"{filename}: unsupported ABI tag {tag.abi}")
-        elif tag.interpreter in {"cp39", "cp38", "cp37", "cp36"}:
+        elif tag.interpreter in {"cp311", "cp310", "cp39", "cp38", "cp37", "cp36"}:
             if tag.abi != "abi3":
                 raise ValueError(f"{filename}: unsupported ABI tag {tag.abi}")
         else:

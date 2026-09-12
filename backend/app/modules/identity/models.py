@@ -37,6 +37,7 @@ ORGANIZATION_VERIFICATION_STATUSES = ("unverified", "pending", "verified", "fail
 ORGANIZATION_STATUSES = ("active", "suspended", "withdrawn")
 USER_STATUSES = ("invited", "active", "suspended", "disabled")
 MFA_STATUSES = ("unknown", "disabled", "enabled")
+SESSION_AUTH_METHODS = ("password", "siwe")
 MEMBER_STATUSES = ("invited", "active", "suspended", "removed")
 ORGANIZATION_ROLE_CODES = (
     "provider_data_admin",
@@ -185,6 +186,16 @@ class LocalDemoSession(Base):
         ForeignKey(f"{SCHEMA}.users.id", ondelete="RESTRICT")
     )
     session_digest: Mapped[str] = mapped_column(String(71), unique=True)
+    auth_method: Mapped[str] = mapped_column(
+        String(16), default="password", server_default="password"
+    )
+    wallet_binding_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            f"{SCHEMA}.wallet_identity_bindings.id",
+            name="fk_local_sessions_wallet_binding",
+            ondelete="RESTRICT",
+        )
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, server_default=func.now()
@@ -196,6 +207,14 @@ class LocalDemoSession(Base):
         CheckConstraint(
             "length(session_digest) = 71 AND substr(session_digest, 1, 7) = 'sha256:'",
             name="session_digest_format",
+        ),
+        CheckConstraint(
+            f"auth_method IN ({sql_values(SESSION_AUTH_METHODS)})", name="auth_method"
+        ),
+        CheckConstraint(
+            "(auth_method='password' AND wallet_binding_id IS NULL) OR "
+            "(auth_method='siwe' AND wallet_binding_id IS NOT NULL)",
+            name="auth_method_shape",
         ),
         Index("ix_local_demo_sessions_user_active", "user_id", "expires_at"),
     )

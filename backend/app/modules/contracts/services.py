@@ -44,6 +44,11 @@ from app.modules.identity.models import (
 from app.modules.reviews.models import ReviewDecision, ReviewTask
 from app.modules.reviews.services import canonical_decision_digest
 from app.modules.spaces.models import Space, SpaceParticipant, SpaceParticipantRole
+from app.modules.web3.models import (
+    ChainEventReceipt,
+    ContractChainAnchor,
+    WalletIdentityBinding,
+)
 from app.modules.audit.services import (
     AuditCommandContext,
     AuditInvariantError,
@@ -424,30 +429,81 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 
 def _validate_signature(signature: ContractSignature) -> None:
-    if signature.signature_type != "demo":
-        raise ContractInvariantError("V1 only accepts demo contract signatures")
+    if signature.signature_type not in {"demo", "evm_receipt"}:
+        raise ContractInvariantError("unsupported contract signature type")
     if signature.verification_status != "verified" or signature.verified_at is None:
-        raise ContractInvariantError("demo signature must be verified")
+        raise ContractInvariantError("contract signature must be verified")
     if not signature.signature_value_ref:
         raise ContractInvariantError("signature_value_ref is required")
     _require_digest(signature.signed_content_digest, "signed_content_digest")
     _require_digest(signature.signature_digest, "signature_digest")
     _require_json_object(signature.authority_snapshot, "authority_snapshot")
-    expected = {
-        "schema_version": "1.0",
-        "is_demo": True,
-        "organization_id": str(signature.signer_organization_id),
-        "user_id": str(signature.signer_user_id),
-        "organization_member_id": signature.authority_snapshot.get(
-            "organization_member_id"
-        ),
-        "membership_status": "active",
-        "authority_code": "demo_contract_signer",
-        "scope": {
-            "contract_revision_id": str(signature.contract_revision_id),
-            "contract_party_id": str(signature.contract_party_id),
-        },
-    }
+    if signature.signature_type == "demo":
+        expected = {
+            "schema_version": "1.0",
+            "is_demo": True,
+            "organization_id": str(signature.signer_organization_id),
+            "user_id": str(signature.signer_user_id),
+            "organization_member_id": signature.authority_snapshot.get(
+                "organization_member_id"
+            ),
+            "membership_status": "active",
+            "authority_code": "demo_contract_signer",
+            "scope": {
+                "contract_revision_id": str(signature.contract_revision_id),
+                "contract_party_id": str(signature.contract_party_id),
+            },
+        }
+    else:
+        chain_id = signature.authority_snapshot.get("chain_id")
+        transaction_hash = signature.authority_snapshot.get("transaction_hash")
+        log_index = signature.authority_snapshot.get("log_index")
+        if (
+            not isinstance(chain_id, int)
+            or chain_id <= 0
+            or not isinstance(transaction_hash, str)
+            or re.fullmatch(r"0x[0-9a-f]{64}", transaction_hash) is None
+            or not isinstance(log_index, int)
+            or log_index < 0
+        ):
+            raise ContractInvariantError("EVM receipt coordinates are invalid")
+        expected_ref = (
+            f"eip155:{chain_id}:tx:{transaction_hash}:log:{log_index}"
+        )
+        if signature.signature_value_ref != expected_ref:
+            raise ContractInvariantError("EVM signature reference does not match receipt")
+        expected = {
+            "schema_version": "medtrust.evm-receipt-signature/v1",
+            "is_demo": False,
+            "organization_id": str(signature.signer_organization_id),
+            "user_id": str(signature.signer_user_id),
+            "organization_member_id": signature.authority_snapshot.get(
+                "organization_member_id"
+            ),
+            "membership_status": "active",
+            "authority_code": "evm_contract_signer",
+            "scope": {
+                "contract_revision_id": str(signature.contract_revision_id),
+                "contract_party_id": str(signature.contract_party_id),
+            },
+            "wallet_binding_id": signature.authority_snapshot.get("wallet_binding_id"),
+            "wallet_address": signature.authority_snapshot.get("wallet_address"),
+            "chain_id": chain_id,
+            "credential_contract_address": signature.authority_snapshot.get(
+                "credential_contract_address"
+            ),
+            "credential_token_id": signature.authority_snapshot.get(
+                "credential_token_id"
+            ),
+            "chain_event_receipt_id": signature.authority_snapshot.get(
+                "chain_event_receipt_id"
+            ),
+            "transaction_hash": transaction_hash,
+            "log_index": log_index,
+            "block_number": signature.authority_snapshot.get("block_number"),
+            "block_hash": signature.authority_snapshot.get("block_hash"),
+            "confirmations": signature.authority_snapshot.get("confirmations"),
+        }
     if signature.authority_snapshot != expected:
         raise ContractInvariantError("authority_snapshot does not match signer authority")
     digest_document = {
@@ -1004,12 +1060,28 @@ async def sign_contract_revision(
     signature_value_ref: str,
     signed_at: datetime | None = None,
 ) -> ContractSignature:
-    """Append one demo signature and atomically close signing when complete."""
+    """Append one legacy demo signature and atomically close signing when complete."""
 
     if revision.status != "proposed":
         raise ContractInvariantError("only a proposed revision can be signed")
     _require_digest(revision.content_digest, "content_digest")
     await session.flush()
+
+    chain_anchor_id = await session.scalar(
+        select(ContractChainAnchor.id).where(
+            ContractChainAnchor.contract_revision_id == revision.id
+        )
+    )
+    evm_signature_id = await session.scalar(
+        select(ContractSignature.id).where(
+            ContractSignature.contract_revision_id == revision.id,
+            ContractSignature.signature_type == "evm_receipt",
+        )
+    )
+    if chain_anchor_id is not None or evm_signature_id is not None:
+        raise ContractInvariantError(
+            "legacy demo signatures cannot be mixed with the Web3 agreement flow"
+        )
 
     party = await session.get(ContractParty, contract_party_id)
     if (
@@ -1090,6 +1162,200 @@ async def sign_contract_revision(
     )
     session.add(signature)
     await session.flush()
+
+    required_party_ids = set(
+        (
+            await session.scalars(
+                select(ContractParty.id).where(
+                    ContractParty.contract_revision_id == revision.id,
+                    ContractParty.is_required.is_(True),
+                )
+            )
+        ).all()
+    )
+    signed_party_ids = set(
+        (
+            await session.scalars(
+                select(ContractSignature.contract_party_id).where(
+                    ContractSignature.contract_revision_id == revision.id,
+                    ContractSignature.signed_content_digest == revision.content_digest,
+                    ContractSignature.verification_status == "verified",
+                )
+            )
+        ).all()
+    )
+    if required_party_ids and required_party_ids <= signed_party_ids:
+        revision.status = "signed"
+        revision.signed_at = now
+        revision.row_version += 1
+        revision._signing_validated = True
+        await session.flush()
+    return signature
+
+
+async def sign_verified_evm_contract_receipt(
+    session: AsyncSession,
+    revision: ContractRevision,
+    *,
+    contract_party_id: Any,
+    signer_user_id: Any,
+    wallet_binding_id: Any,
+    chain_event_receipt_id: Any,
+    signed_at: datetime | None = None,
+) -> ContractSignature:
+    """Mirror one finalized AgreementConfirmed log as an append-only signature.
+
+    This function never trusts role, organization, address, digest or chain data
+    supplied by a browser. All authority is joined from server-side rows created
+    after SIWE and trusted-RPC receipt verification.
+    """
+
+    if revision.status != "proposed":
+        raise ContractInvariantError("only a proposed revision can be signed")
+    _require_digest(revision.content_digest, "content_digest")
+    await session.flush()
+
+    legacy_signature_id = await session.scalar(
+        select(ContractSignature.id).where(
+            ContractSignature.contract_revision_id == revision.id,
+            ContractSignature.signature_type != "evm_receipt",
+        )
+    )
+    if legacy_signature_id is not None:
+        raise ContractInvariantError(
+            "Web3 agreement confirmations cannot be mixed with legacy demo signatures"
+        )
+
+    party = await session.get(ContractParty, contract_party_id)
+    binding = await session.get(WalletIdentityBinding, wallet_binding_id)
+    receipt = await session.get(ChainEventReceipt, chain_event_receipt_id)
+    now = signed_at or datetime.now(timezone.utc)
+    expected_role = (
+        "space_operator" if party and party.party_role == "operator_witness" else (
+            party.party_role if party else None
+        )
+    )
+    if (
+        party is None
+        or party.contract_revision_id != revision.id
+        or binding is None
+        or binding.status != "active"
+        or binding.user_id != signer_user_id
+        or binding.organization_id != party.organization_id
+        or binding.role_code != expected_role
+        or binding.credential_contract_address is None
+        or binding.credential_token_id is None
+        or binding.credential_scope_digest is None
+        or binding.credential_expires_at is None
+        or _as_utc(binding.credential_expires_at) <= now
+    ):
+        raise ContractInvariantError("active wallet role credential is required")
+    if (
+        receipt is None
+        or receipt.status not in {"finalized", "applied"}
+        or receipt.space_id != binding.space_id
+        or receipt.chain_id != binding.chain_id
+        or receipt.event_name != "AgreementConfirmed"
+        or receipt.subject_type != "contract_revision"
+        or receipt.subject_key != str(revision.id)
+        or receipt.actor_wallet != binding.wallet_address
+    ):
+        raise ContractInvariantError("finalized AgreementConfirmed receipt is required")
+    payload = receipt.payload_snapshot
+    if (
+        payload.get("content_digest") != revision.content_digest
+        or payload.get("contract_party_id") != str(party.id)
+        or payload.get("wallet_binding_id") != str(binding.id)
+    ):
+        raise ContractInvariantError("chain confirmation is bound to another contract scope")
+
+    organization = await session.get(Organization, party.organization_id)
+    user = await session.get(User, signer_user_id)
+    membership = await session.scalar(
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == party.organization_id,
+            OrganizationMember.user_id == signer_user_id,
+        )
+    )
+    member_valid_from = _as_utc(membership.valid_from) if membership else None
+    member_valid_until = _as_utc(membership.valid_until) if membership else None
+    if organization is None or organization.status != "active":
+        raise ContractInvariantError("signer organization is not active")
+    if user is None or user.status != "active":
+        raise ContractInvariantError("signer user is not active")
+    if (
+        membership is None
+        or membership.status != "active"
+        or (member_valid_from is not None and member_valid_from > now)
+        or (member_valid_until is not None and member_valid_until <= now)
+    ):
+        raise ContractInvariantError("signer is not an active organization member")
+    signer_role = await session.get(
+        OrganizationMemberRole, (membership.id, "contract_signer")
+    )
+    if signer_role is None:
+        raise ContractInvariantError("signer lacks the contract_signer authority")
+
+    value_ref = (
+        f"eip155:{receipt.chain_id}:tx:{receipt.transaction_hash}:log:{receipt.log_index}"
+    )
+    authority_snapshot = {
+        "schema_version": "medtrust.evm-receipt-signature/v1",
+        "is_demo": False,
+        "organization_id": str(party.organization_id),
+        "user_id": str(signer_user_id),
+        "organization_member_id": str(membership.id),
+        "membership_status": "active",
+        "authority_code": "evm_contract_signer",
+        "scope": {
+            "contract_revision_id": str(revision.id),
+            "contract_party_id": str(party.id),
+        },
+        "wallet_binding_id": str(binding.id),
+        "wallet_address": binding.wallet_address,
+        "chain_id": receipt.chain_id,
+        "credential_contract_address": binding.credential_contract_address,
+        "credential_token_id": binding.credential_token_id,
+        "chain_event_receipt_id": str(receipt.id),
+        "transaction_hash": receipt.transaction_hash,
+        "log_index": receipt.log_index,
+        "block_number": receipt.block_number,
+        "block_hash": receipt.block_hash,
+        "confirmations": receipt.confirmations,
+    }
+    digest_document = {
+        "schema_version": "1.0",
+        "contract_revision_id": str(revision.id),
+        "contract_party_id": str(party.id),
+        "signer_organization_id": str(party.organization_id),
+        "signer_user_id": str(signer_user_id),
+        "signature_type": "evm_receipt",
+        "signature_value_ref": value_ref,
+        "signed_content_digest": revision.content_digest,
+        "authority_snapshot": authority_snapshot,
+        "verification_status": "verified",
+        "signed_at": _canonical_timestamp(now),
+        "verified_at": _canonical_timestamp(now),
+    }
+    signature = ContractSignature(
+        contract_revision_id=revision.id,
+        contract_party_id=party.id,
+        signer_organization_id=party.organization_id,
+        signer_user_id=signer_user_id,
+        signature_type="evm_receipt",
+        signature_value_ref=value_ref,
+        signed_content_digest=revision.content_digest,
+        authority_snapshot=authority_snapshot,
+        verification_status="verified",
+        signature_digest=canonical_document_digest(digest_document),
+        signed_at=now,
+        verified_at=now,
+        created_at=now,
+    )
+    session.add(signature)
+    await session.flush()
+    receipt.status = "applied"
+    receipt.applied_at = now
 
     required_party_ids = set(
         (

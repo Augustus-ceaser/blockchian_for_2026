@@ -34,8 +34,8 @@ test('catalog candidates stay read-only until governance and service integration
     readFile(modelPagePath, 'utf8'),
   ])
 
-  const dataCard = dataPage.match(/function PublicDatasetCatalogCard[\s\S]*?\n}\n\nfunction dataMarketplaceSource/)?.[0]
-  const modelCard = modelPage.match(/function PublicModelCatalogCard[\s\S]*?\n}\n\nfunction modelMarketplaceSource/)?.[0]
+  const dataCard = dataPage.match(/function PublicDatasetCatalogCard[\s\S]*?\r?\n}\r?\n\r?\nfunction dataMarketplaceSource/)?.[0]
+  const modelCard = modelPage.match(/function PublicModelCatalogCard[\s\S]*?\r?\n}\r?\n\r?\nfunction modelMarketplaceSource/)?.[0]
   for (const card of [dataCard, modelCard]) {
     assert.ok(card, 'missing public catalog card')
     assert.match(card, /目录资源/)

@@ -38,7 +38,7 @@ test('application lifecycle exposes exactly five wizard steps', async () => {
 
 test('PathMNIST sample fill only updates local form state', async () => {
   const page = await source(pagePath)
-  const sampleBody = page.match(/const fillSample = \(\) => \{([\s\S]*?)\n  \}\n\n  const saveDraft/)
+  const sampleBody = page.match(/const fillSample = \(\) => \{([\s\S]*?)\r?\n  \}\r?\n\r?\n  const saveDraft/)
   assert.ok(sampleBody)
   assert.ok(sampleBody[1].includes('form.setFieldsValue(sampleDraft(options.data))'))
   assert.ok(sampleBody[1].includes('尚未保存或提交'))

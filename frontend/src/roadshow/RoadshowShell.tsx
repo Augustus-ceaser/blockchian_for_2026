@@ -12,13 +12,17 @@ import {
   RobotOutlined,
   PlayCircleOutlined,
   SafetyCertificateOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
 import { Avatar, Button, Dropdown, Layout, Menu, Select, Space, type MenuProps } from 'antd'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Brand } from '../components/Brand'
 import { roleProfiles, useRoadshow } from './RoadshowContext'
 import type { DemoIdentity } from './types'
 import { RoleAssistant } from './RoleAssistant'
+import { WalletQualificationPanel } from './WalletQualificationPanel'
+import { getWalletCapabilities, type WalletCapabilities } from './web3Wallet'
 
 const { Sider, Header, Content } = Layout
 
@@ -107,6 +111,8 @@ export function RoadshowShell() {
   const navigate = useNavigate()
   const location = useLocation()
   const { identity, setIdentity, logout, contextError, roadshow, exitRoadshow } = useRoadshow()
+  const [walletPanelOpen, setWalletPanelOpen] = useState(false)
+  const [walletCapabilities, setWalletCapabilities] = useState<WalletCapabilities | null>(null)
   const profile = roleProfiles[identity]
   const segment = location.pathname.split('/')[1] || 'overview'
   const dataMarketplaceRoute = location.pathname.startsWith('/external-catalog/datasets')
@@ -122,11 +128,27 @@ export function RoadshowShell() {
       : location.pathname.startsWith('/portal/')
         ? location.pathname
         : `/${segment}`
-  const userMenu: MenuProps = { items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: async () => { await logout(); navigate('/demo-login') } }] }
+  const userMenu: MenuProps = { items: [
+    ...(walletCapabilities?.enabled ? [{
+      key: 'wallet-qualification',
+      icon: <WalletOutlined />,
+      label: '钱包与资格',
+      onClick: () => setWalletPanelOpen(true),
+    }, { type: 'divider' as const }] : []),
+    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: async () => { await logout(); navigate('/demo-login') } },
+  ] }
   const debugRoleSwitch = import.meta.env.VITE_ENABLE_DEMO_ROLE_SWITCH === 'true'
   const pageTitle = identity === 'data_requester' && segment === 'applications'
     ? '我的申请'
     : titleByPath[location.pathname] || titleByPath[segment] || 'MedTrust Space'
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void getWalletCapabilities(controller.signal)
+      .then(setWalletCapabilities)
+      .catch(() => setWalletCapabilities(null))
+    return () => controller.abort()
+  }, [])
 
   return <Layout className="app-shell phase4-shell">
     <Sider width={232} className="app-sider" breakpoint="lg" collapsedWidth={72}>
@@ -152,6 +174,11 @@ export function RoadshowShell() {
       </div>}
       <Content className="app-content"><Outlet /></Content>
       <RoleAssistant />
+      <WalletQualificationPanel
+        open={walletPanelOpen}
+        capabilities={walletCapabilities}
+        onClose={() => setWalletPanelOpen(false)}
+      />
     </Layout>
   </Layout>
 }

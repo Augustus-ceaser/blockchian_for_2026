@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -14,6 +15,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import close_database
 from app.db.session import session_factory
 from app.modules.identity.local_auth import LoginRateLimiter, authenticated_role_for_request
+from app.modules.web3.identity_service import WalletIdentityPolicy
 
 
 @asynccontextmanager
@@ -39,6 +41,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attempts=current_settings.login_rate_limit_attempts,
         window_seconds=current_settings.login_rate_limit_window_seconds,
     )
+    if current_settings.web3_enabled:
+        siwe_origin = current_settings.web3_siwe_uri.rstrip("/")
+        application.state.web3_identity_policy = WalletIdentityPolicy(
+            domain=current_settings.web3_siwe_domain,
+            login_uri=f"{siwe_origin}/auth/wallet/verify",
+            bind_uri=f"{siwe_origin}/auth/wallet/bind/verify",
+            allowed_chain_ids=(current_settings.web3_chain_id,),
+            challenge_ttl=timedelta(
+                seconds=current_settings.web3_challenge_ttl_seconds
+            ),
+            session_lifetime=timedelta(
+                seconds=current_settings.session_lifetime_seconds
+            ),
+            minimum_receipt_confirmations=(
+                current_settings.web3_required_confirmations
+            ),
+        )
     application.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=current_settings.allowed_host_list,
@@ -102,7 +121,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         content={"detail": exc.detail},
                         headers=exc.headers,
                     )
-            headers = [(key, value) for key, value in request.scope["headers"] if key.lower() != b"x-demo-identity"]
+            headers = [
+                (key, value)
+                for key, value in request.scope["headers"]
+                if key.lower() != b"x-demo-identity"
+            ]
             headers.append((b"x-demo-identity", role.encode("ascii")))
             request.scope["headers"] = headers
         return await call_next(request)

@@ -91,7 +91,7 @@ POLICY_CAPABILITY_CODES = (
     "audit_evidence_emit",
 )
 POLICY_BINDING_STATUSES = ("pending", "accepted", "rejected", "revoked")
-CONTRACT_SIGNATURE_TYPES = ("demo",)
+CONTRACT_SIGNATURE_TYPES = ("demo", "evm_receipt")
 CONTRACT_SIGNATURE_VERIFICATION_STATUSES = ("verified",)
 
 

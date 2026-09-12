@@ -4,12 +4,13 @@ $ErrorActionPreference = 'Stop'
 $workspace = Get-CoordinatorWorkspace
 $python = Get-CoordinatorPython $workspace
 $wheelhouse = Get-CoordinatorWheelhouse $workspace
-Assert-LinuxAmd64Docker
 
 if (Test-CoordinatorWheelhouse $workspace $wheelhouse $python) {
     Write-Host 'Verified Coordinator wheelhouse already exists; no download performed.' -ForegroundColor Green
     exit 0
 }
+
+Assert-LinuxAmd64Docker
 
 $cacheRoot = Join-Path $workspace '.cache\coordinator-wheelhouse'
 $temporary = Join-Path $cacheRoot ('download-' + [guid]::NewGuid().ToString('N'))
@@ -31,7 +32,7 @@ try {
     docker run --rm --platform linux/amd64 `
         -v "${temporary}:/wheelhouse" `
         python:3.12.13-slim-bookworm `
-        sh -lc "python -m pip download --only-binary=:all: --index-url https://pypi.org/simple --dest /wheelhouse /wheelhouse/$($torch.Name) numpy==2.3.5 psutil==7.2.2 alembic==1.18.5 asyncpg==0.31.0 fastapi==0.139.2 minio==7.2.20 pydantic-settings==2.14.2 PyYAML==6.0.3 SQLAlchemy==2.0.51 uvicorn==0.51.0"
+        sh -lc "python -m pip download --only-binary=:all: --index-url https://pypi.org/simple --dest /wheelhouse /wheelhouse/$($torch.Name) numpy==2.3.5 psutil==7.2.2 alembic==1.18.5 asyncpg==0.31.0 eth-account==0.14.0 fastapi==0.139.2 minio==7.2.20 pydantic-settings==2.14.2 PyYAML==6.0.3 SQLAlchemy==2.0.51 uvicorn==0.51.0"
     if ($LASTEXITCODE -ne 0) { throw 'Official PyPI dependency download failed.' }
 
     $localManifest = Join-Path $temporary 'manifest.json'

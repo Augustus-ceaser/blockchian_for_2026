@@ -22,6 +22,9 @@ from app.api.routes.connector_control import router as connector_control_router
 from app.api.routes.role_assistant import router as role_assistant_router
 from app.api.routes.service_access import router as service_access_router
 from app.api.routes.commerce import router as commerce_router
+from app.api.routes.web3_identity import router as web3_identity_router
+from app.api.routes.web3_agreements import router as web3_agreements_router
+from app.api.routes.web3_operations import router as web3_operations_router
 
 api_router = APIRouter()
 api_router.include_router(system_router)
@@ -46,3 +49,6 @@ api_router.include_router(roadshow_router)
 api_router.include_router(role_assistant_router)
 api_router.include_router(service_access_router)
 api_router.include_router(commerce_router)
+api_router.include_router(web3_identity_router)
+api_router.include_router(web3_agreements_router)
+api_router.include_router(web3_operations_router)

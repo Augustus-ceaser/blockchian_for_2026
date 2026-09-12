@@ -76,6 +76,26 @@ class Settings(BaseSettings):
     role_assistant_state_enabled: bool = True
     role_assistant_semantic_search_enabled: bool = False
 
+    web3_enabled: bool = False
+    web3_chain_id: int = 31337
+    web3_rpc_url: str = "http://127.0.0.1:8545"
+    web3_required_confirmations: int = 1
+    web3_siwe_domain: str = "127.0.0.1:5173"
+    web3_siwe_uri: str = "http://127.0.0.1:5173"
+    web3_challenge_ttl_seconds: int = 300
+    web3_space_scope_digest: str = ""
+    web3_role_credential_address: str = ""
+    web3_agreement_registry_address: str = ""
+    web3_escrow_address: str = ""
+    web3_settlement_token_address: str = ""
+    web3_credential_issuer_address: str = ""
+    web3_execution_attestor_address: str = ""
+    web3_delivery_attestor_address: str = ""
+    web3_settlement_token_decimals: int = 6
+    web3_escrow_refund_seconds: int = 24 * 60 * 60
+    web3_rpc_timeout_seconds: float = 5.0
+    web3_security_review_digest: str = ""
+
     database_url: str = (
         "postgresql+asyncpg://medtrust:medtrust_dev_only@127.0.0.1:5432/medtrust"
     )
@@ -283,6 +303,80 @@ class Settings(BaseSettings):
                     raise ValueError(
                         "HTTP external catalogs require an explicit local-only allowance."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def validate_web3_configuration(self) -> "Settings":
+        if not 1 <= self.web3_required_confirmations <= 64:
+            raise ValueError("web3_required_confirmations must be between 1 and 64")
+        if not 60 <= self.web3_challenge_ttl_seconds <= 600:
+            raise ValueError("web3_challenge_ttl_seconds must be between 60 and 600")
+        if self.web3_chain_id <= 0:
+            raise ValueError("web3_chain_id must be positive")
+        if not 2 <= self.web3_settlement_token_decimals <= 18:
+            raise ValueError("web3_settlement_token_decimals must be between 2 and 18")
+        if not 600 <= self.web3_escrow_refund_seconds <= 30 * 24 * 60 * 60:
+            raise ValueError(
+                "web3_escrow_refund_seconds must be between 10 minutes and 30 days"
+            )
+        if not 0.5 <= self.web3_rpc_timeout_seconds <= 30:
+            raise ValueError("web3_rpc_timeout_seconds must be between 0.5 and 30")
+        if not self.web3_enabled:
+            return self
+
+        parsed_rpc = urlsplit(self.web3_rpc_url.strip())
+        if parsed_rpc.scheme not in {"http", "https"} or not parsed_rpc.hostname:
+            raise ValueError("web3_rpc_url must be an absolute HTTP(S) URL")
+        loopback_hosts = {"127.0.0.1", "localhost", "::1", "host.docker.internal"}
+        if parsed_rpc.scheme == "http" and (
+            parsed_rpc.hostname not in loopback_hosts
+            or self.deployment_mode not in {"local", "lan-roadshow"}
+        ):
+            raise ValueError("Web3 HTTP RPC is allowed only for a local demo endpoint")
+
+        siwe_uri = urlsplit(self.web3_siwe_uri.strip())
+        if (
+            siwe_uri.scheme not in {"http", "https"}
+            or not siwe_uri.hostname
+            or siwe_uri.netloc != self.web3_siwe_domain.strip()
+        ):
+            raise ValueError("SIWE domain must exactly match the configured SIWE URI authority")
+        if siwe_uri.scheme == "http" and siwe_uri.hostname not in loopback_hosts:
+            raise ValueError("SIWE requires HTTPS except on a loopback demo origin")
+
+        space_scope_digest = self.web3_space_scope_digest.strip()
+        if (
+            re.fullmatch(r"0x[0-9a-fA-F]{64}", space_scope_digest) is None
+            or int(space_scope_digest, 16) == 0
+        ):
+            raise ValueError("web3_space_scope_digest must be a non-zero bytes32")
+        self.web3_space_scope_digest = space_scope_digest.lower()
+
+        address_pattern = re.compile(r"0x[0-9a-fA-F]{40}")
+        address_fields = (
+            "web3_role_credential_address",
+            "web3_agreement_registry_address",
+            "web3_escrow_address",
+            "web3_settlement_token_address",
+            "web3_credential_issuer_address",
+            "web3_execution_attestor_address",
+            "web3_delivery_attestor_address",
+        )
+        for field_name in address_fields:
+            value = getattr(self, field_name).strip()
+            if address_pattern.fullmatch(value) is None:
+                raise ValueError(f"{field_name} must be a deployed EVM address")
+            setattr(self, field_name, value.lower())
+
+        if self.deployment_mode not in {"local", "lan-roadshow"}:
+            if not re.fullmatch(
+                r"sha256:[0-9a-f]{64}", self.web3_security_review_digest.strip()
+            ):
+                raise ValueError(
+                    "deployed Web3 mode requires an independent security-review digest"
+                )
+            if self.web3_chain_id == 31337:
+                raise ValueError("the local Hardhat chain is forbidden outside demo modes")
         return self
 
     @property

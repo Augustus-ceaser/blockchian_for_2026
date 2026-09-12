@@ -24,21 +24,39 @@ import {
   CopyOutlined,
   EyeOutlined,
   FileProtectOutlined,
+  LinkOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   ShoppingCartOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { platformCommand, platformGet } from './api'
 import { createSingleFlight, startAbortableLoad } from './requestLifecycle'
 import { useRoadshow } from './RoadshowContext'
-import type { ContractSecurityResult, ContractSecurityValidation } from './types'
+import type { ContractSecurityResult, ContractSecurityValidation, DemoIdentity } from './types'
 import {
   createOrderFromContract,
   listCommercialOrders,
   type CommercialOrder,
 } from './commerce'
+import {
+  executePreparedTransaction,
+  getWalletCapabilities,
+  WEB3_EVENT_TOPICS,
+  type WalletCapabilities,
+} from './web3Commerce'
+import {
+  findAutomaticActivationLogIndex,
+  getWeb3Agreement,
+  prepareWeb3Agreement,
+  prepareWeb3AgreementActivation,
+  prepareWeb3AgreementConfirmation,
+  synchronizeWeb3AgreementReceipt,
+  type Web3AgreementAnchor,
+  type Web3AgreementState,
+} from './web3Agreements'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -252,6 +270,379 @@ function useLoad<T>(path: string) {
   return { data, error, loading, refresh: () => setNonce((value) => value + 1) }
 }
 
+function useWeb3AgreementMode(contractRevisionId: string) {
+  const [capabilities, setCapabilities] = useState<WalletCapabilities | null>(null)
+  const [agreement, setAgreement] = useState<Web3AgreementState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [nonce, setNonce] = useState(0)
+
+  useEffect(() => {
+    if (!contractRevisionId) {
+      setLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    setLoading(true)
+    setError('')
+    void (async () => {
+      try {
+        const nextCapabilities = await getWalletCapabilities(controller.signal)
+        if (controller.signal.aborted) return
+        setCapabilities(nextCapabilities)
+        if (!nextCapabilities.enabled) {
+          setAgreement(null)
+          return
+        }
+        const nextAgreement = await getWeb3Agreement(contractRevisionId, controller.signal)
+        if (!controller.signal.aborted) setAgreement(nextAgreement)
+      } catch (reason) {
+        if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : '链上合约状态读取失败')
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    })()
+    return () => controller.abort()
+  }, [contractRevisionId, nonce])
+
+  return {
+    contractRevisionId,
+    capabilities,
+    agreement,
+    loading,
+    error,
+    refresh: () => setNonce((value) => value + 1),
+  }
+}
+
+const web3PartySteps: Array<{ bit: number; label: string }> = [
+  { bit: 1, label: '需求方' },
+  { bit: 2, label: '医院数据方' },
+  { bit: 4, label: '模型方' },
+  { bit: 8, label: '空间运营方' },
+]
+
+const identityConfirmationBits: Record<DemoIdentity, number> = {
+  data_requester: 1,
+  data_provider: 2,
+  model_provider: 4,
+  space_operator: 8,
+}
+
+function shortChainValue(value: string | null | undefined) {
+  if (!value) return '-'
+  return value.length > 22 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value
+}
+
+function web3StatusTag(anchor: Web3AgreementAnchor | null) {
+  if (!anchor) return <Tag>待锚定</Tag>
+  const meta: Record<string, { color: string; label: string }> = {
+    prepared: { color: 'gold', label: '待登记' },
+    registered: { color: 'blue', label: '待四方确认' },
+    confirming: { color: 'cyan', label: '确认中' },
+    active: { color: 'green', label: '已生效' },
+    suspended: { color: 'orange', label: '已暂停' },
+    ended: { color: 'default', label: '已结束' },
+    orphaned: { color: 'red', label: '回执异常' },
+  }
+  const status = meta[anchor.status] || { color: 'default', label: anchor.status }
+  return <Tag color={status.color}>{status.label}</Tag>
+}
+
+type Web3AgreementCardProps = {
+  identity: DemoIdentity
+  contractStatus: string
+  confirmationReady: boolean
+  activationReady: boolean
+  mode: ReturnType<typeof useWeb3AgreementMode>
+  onChanged: () => void
+}
+
+function Web3AgreementCard({
+  identity,
+  contractStatus,
+  confirmationReady,
+  activationReady,
+  mode,
+  onChanged,
+}: Web3AgreementCardProps) {
+  const [api, holder] = message.useMessage()
+  const [accepted, setAccepted] = useState(false)
+  const [busy, setBusy] = useState('')
+  const [actionError, setActionError] = useState('')
+  const guard = useRef(createSingleFlight()).current
+  const currentAgreement = mode.agreement?.contract_revision_id === mode.contractRevisionId
+    ? mode.agreement
+    : null
+  const anchor = currentAgreement?.anchored ? currentAgreement : null
+  const completed = anchor?.confirmation_progress.completed || 0
+  const required = anchor?.confirmation_progress.required || 4
+  const myBit = identityConfirmationBits[identity]
+  const alreadyConfirmed = Boolean(anchor && (anchor.confirmation_bitmap & myBit))
+  const canRegister = identity === 'space_operator'
+    && Boolean(currentAgreement)
+    && !mode.loading
+    && !mode.error
+    && (!anchor || anchor.status === 'prepared')
+    && contractStatus === 'proposed'
+  const canConfirm = Boolean(
+    anchor
+    && !mode.loading
+    && !mode.error
+    && contractStatus === 'proposed'
+    && ['registered', 'confirming'].includes(anchor.status)
+    && !alreadyConfirmed
+    && (identity !== 'space_operator' || anchor.confirmation_bitmap === 7),
+  )
+  const canActivate = identity === 'space_operator'
+    && !mode.loading
+    && !mode.error
+    && anchor?.status === 'confirming'
+    && anchor.confirmation_bitmap === 15
+    && contractStatus === 'signed'
+
+  const refreshAll = () => {
+    mode.refresh()
+    onChanged()
+  }
+
+  const register = async () => {
+    await guard.run(async () => {
+      setBusy('register')
+      setActionError('')
+      try {
+        const preparation = await prepareWeb3Agreement(
+          anchor?.contract_revision_id || currentAgreement?.contract_revision_id || '',
+        )
+        if (!preparation.call.needs_submission) {
+          refreshAll()
+          return
+        }
+        if (preparation.call.expected_event !== 'AgreementRegistered') {
+          throw new Error('服务端返回了不匹配的合约登记事件。')
+        }
+        const result = await executePreparedTransaction(
+          preparation.call.transaction,
+          {
+            chain_id: preparation.chain_id,
+            wallet_address: preparation.call.transaction.from,
+            expected_event: {
+              contract_address: preparation.registry_address,
+              topic: WEB3_EVENT_TOPICS.AgreementRegistered,
+            },
+          },
+        )
+        if (result.log_index === undefined) throw new Error('登记交易缺少事件位置。')
+        const synchronized = await synchronizeWeb3AgreementReceipt(
+          preparation.chain_anchor_id,
+          'AgreementRegistered',
+          result.transaction_hash,
+          result.log_index,
+        )
+        if (synchronized.applied) api.success('链上合约摘要已登记')
+        else api.warning('交易已提交，等待服务端确认区块终局性')
+        refreshAll()
+      } catch (reason) {
+        const description = reason instanceof Error ? reason.message : '链上合约登记失败'
+        setActionError(description)
+        api.error(description)
+        mode.refresh()
+      } finally {
+        setBusy('')
+      }
+    })
+  }
+
+  const confirm = async () => {
+    if (!anchor) return
+    await guard.run(async () => {
+      setBusy('confirm')
+      setActionError('')
+      try {
+        const preparation = await prepareWeb3AgreementConfirmation(anchor.chain_anchor_id)
+        if (preparation.call.expected_event !== 'AgreementConfirmed') {
+          throw new Error('服务端返回了不匹配的四方确认事件。')
+        }
+        const result = await executePreparedTransaction(
+          preparation.call.transaction,
+          {
+            chain_id: preparation.chain_id,
+            wallet_address: preparation.call.transaction.from,
+            expected_event: {
+              contract_address: preparation.registry_address,
+              topic: WEB3_EVENT_TOPICS.AgreementConfirmed,
+            },
+          },
+        )
+        if (result.log_index === undefined) throw new Error('确认交易缺少事件位置。')
+        const confirmation = await synchronizeWeb3AgreementReceipt(
+          anchor.chain_anchor_id,
+          'AgreementConfirmed',
+          result.transaction_hash,
+          result.log_index,
+        )
+        if (!confirmation.applied) {
+          api.warning('交易已提交，等待服务端确认区块终局性')
+          refreshAll()
+          return
+        }
+
+        const activationLogIndex = await findAutomaticActivationLogIndex(
+          result.transaction_hash,
+          preparation.registry_address,
+        )
+        if (activationLogIndex !== null) {
+          const activation = await synchronizeWeb3AgreementReceipt(
+            anchor.chain_anchor_id,
+            'AgreementActivated',
+            result.transaction_hash,
+            activationLogIndex,
+          )
+          if (activation.applied) api.success('本方确认已复核，四方合约已自动生效')
+          else api.warning('四方确认已记录，合约生效事件仍在等待终局确认')
+        } else {
+          api.success('本方链上确认已由服务端复核')
+        }
+        setAccepted(false)
+        refreshAll()
+      } catch (reason) {
+        const description = reason instanceof Error ? reason.message : '链上确认失败'
+        setActionError(description)
+        api.error(description)
+        mode.refresh()
+      } finally {
+        setBusy('')
+      }
+    })
+  }
+
+  const activate = async () => {
+    if (!anchor) return
+    await guard.run(async () => {
+      setBusy('activate')
+      setActionError('')
+      try {
+        const preparation = await prepareWeb3AgreementActivation(anchor.chain_anchor_id)
+        if (preparation.call.expected_event !== 'AgreementActivated') {
+          throw new Error('服务端返回了不匹配的合约生效事件。')
+        }
+        const result = await executePreparedTransaction(
+          preparation.call.transaction,
+          {
+            chain_id: preparation.chain_id,
+            wallet_address: preparation.call.transaction.from,
+            expected_event: {
+              contract_address: preparation.registry_address,
+              topic: WEB3_EVENT_TOPICS.AgreementActivated,
+            },
+          },
+        )
+        if (result.log_index === undefined) throw new Error('生效交易缺少事件位置。')
+        const synchronized = await synchronizeWeb3AgreementReceipt(
+          anchor.chain_anchor_id,
+          'AgreementActivated',
+          result.transaction_hash,
+          result.log_index,
+        )
+        if (synchronized.applied) api.success('链上合约已生效')
+        else api.warning('生效交易已提交，等待服务端确认区块终局性')
+        refreshAll()
+      } catch (reason) {
+        const description = reason instanceof Error ? reason.message : '合约生效失败'
+        setActionError(description)
+        api.error(description)
+        mode.refresh()
+      } finally {
+        setBusy('')
+      }
+    })
+  }
+
+  return <Card
+    className="phase54-web3-card"
+    title={<Space><LinkOutlined /> 链上四方确认 {web3StatusTag(anchor)}</Space>}
+    extra={<Space size={6} wrap>
+      <Tag color="cyan">{mode.capabilities?.chain_name}</Tag>
+      <Button type="text" size="small" icon={<ReloadOutlined />} onClick={refreshAll}>刷新</Button>
+    </Space>}
+  >
+    {holder}
+    {mode.error && <Alert type="error" showIcon title="链上状态暂不可用" description={mode.error} />}
+    {actionError && <Alert type="error" showIcon title="本次链上操作未完成" description={actionError} closable onClose={() => setActionError('')} />}
+    <Spin spinning={mode.loading}>
+      <div className="phase54-web3-summary">
+        <div>
+          <Text type="secondary">确认进度</Text>
+          <strong>{completed}/{required}</strong>
+        </div>
+        <Progress percent={Math.round(completed / required * 100)} showInfo={false} />
+        <Text type="secondary">Chain ID {mode.capabilities?.chain_id}</Text>
+      </div>
+
+      <div className="phase54-web3-parties">
+        {web3PartySteps.map((party) => {
+          const confirmed = Boolean(anchor && (anchor.confirmation_bitmap & party.bit))
+          return <div className={confirmed ? 'is-confirmed' : ''} key={party.bit}>
+            <CheckCircleOutlined />
+            <span>{party.label}</span>
+            <Tag color={confirmed ? 'green' : 'default'}>{confirmed ? '已确认' : '待确认'}</Tag>
+          </div>
+        })}
+      </div>
+
+      {anchor && <details className="phase54-web3-evidence">
+        <summary>查看链上定位信息</summary>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="合约摘要"><Text code copyable={{ text: anchor.content_digest }}>{shortChainValue(anchor.content_digest)}</Text></Descriptions.Item>
+          <Descriptions.Item label="Registry"><Text code copyable={{ text: anchor.registry_address }}>{shortChainValue(anchor.registry_address)}</Text></Descriptions.Item>
+          <Descriptions.Item label="登记交易"><Text copyable={anchor.registration_tx_hash ? { text: anchor.registration_tx_hash } : false}>{shortChainValue(anchor.registration_tx_hash)}</Text></Descriptions.Item>
+          <Descriptions.Item label="生效交易"><Text copyable={anchor.activation_tx_hash ? { text: anchor.activation_tx_hash } : false}>{shortChainValue(anchor.activation_tx_hash)}</Text></Descriptions.Item>
+        </Descriptions>
+      </details>}
+
+      <Flex justify="space-between" align="center" gap={12} wrap className="phase54-web3-actions">
+        <Text type="secondary">
+          <WalletOutlined /> 钱包回执只提供定位；平台以受信 RPC 复核后的链上事件更新状态。
+        </Text>
+        <Space wrap>
+          {canRegister && <Button
+            type="primary"
+            icon={<LinkOutlined />}
+            disabled={!confirmationReady}
+            loading={busy === 'register'}
+            onClick={register}
+          >登记链上摘要</Button>}
+          {canConfirm && <>
+            <Checkbox checked={accepted} onChange={(event) => setAccepted(event.target.checked)}>已核对当前摘要与条款</Checkbox>
+            <Button
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              disabled={!accepted || !confirmationReady}
+              loading={busy === 'confirm'}
+              onClick={confirm}
+            >钱包确认</Button>
+          </>}
+          {canActivate && <Button
+            type="primary"
+            icon={<FileProtectOutlined />}
+            disabled={!activationReady}
+            loading={busy === 'activate'}
+            onClick={activate}
+          >触发链上生效</Button>}
+          {!canRegister && !canConfirm && !canActivate && anchor?.status !== 'active' && <Text type="secondary">
+            {alreadyConfirmed ? '本方已确认，等待其余参与方。' : identity === 'space_operator' && anchor?.confirmation_bitmap !== 7 ? '运营方须在其他三方之后确认。' : '等待当前流程节点完成。'}
+          </Text>}
+        </Space>
+      </Flex>
+      <Text type="secondary" className="phase54-web3-boundary">
+        本阶段仅上链合约摘要、四方地址、有效期与状态；不写入合同正文或医疗数据。钱包与 SBT 仅用于演示资格证明，不替代法定身份核验。
+      </Text>
+    </Spin>
+  </Card>
+}
+
 export function ContractManagementPage() {
   const navigate = useNavigate()
   const state = useLoad<{ items: DigitalContract[]; total: number }>('/digital-contracts')
@@ -297,6 +688,9 @@ export function ContractDetailPage() {
   const [commercialError, setCommercialError] = useState('')
   const guard = useRef(createSingleFlight()).current
   const detail = state.data
+  const web3Mode = useWeb3AgreementMode(detail?.revision_id || '')
+  const web3Enabled = web3Mode.capabilities?.enabled === true
+  const legacyConfirmationEnabled = web3Mode.capabilities?.enabled === false
   const myRole = {
     data_requester: 'data_requester',
     data_provider: 'data_provider',
@@ -383,7 +777,7 @@ export function ContractDetailPage() {
   return <div className="page-stack">
     {holder}
     <Flex justify="space-between" align="center" wrap gap={12}>
-      <div><Title level={2}>{detail?.name || '数字合约'}</Title><Paragraph type="secondary">{detail?.contract_number} · 内部结构化确认</Paragraph></div>
+      <div><Title level={2}>{detail?.name || '数字合约'}</Title><Paragraph type="secondary">{detail?.contract_number} · {web3Enabled ? '链上摘要确认' : legacyConfirmationEnabled ? '内部结构化确认' : '正在核验确认方式'}</Paragraph></div>
       <Space wrap>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/contracts')}>返回列表</Button>
         {detail?.status === 'active' && identity === 'data_requester' && (contractOrder
@@ -394,7 +788,7 @@ export function ContractDetailPage() {
         {detail?.status === 'active' && identity !== 'data_requester' && (executionOrder
           ? <Button type="primary" icon={<CodeSandboxOutlined />} disabled={!activationSecurityReady} title={activationSecurityReady ? undefined : '安全合约验证全部通过后才能进入执行准备'} onClick={() => navigate(`/execution/${detail.contract_id}`)}>进入执行准备</Button>
           : <Button icon={<CodeSandboxOutlined />} disabled loading={commercialLoading}>{commercialError ? '结算状态核验失败' : '等待需求方完成结算'}</Button>)}
-        <Button icon={<ReloadOutlined />} onClick={() => { state.refresh(); audit.refresh() }}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => { state.refresh(); audit.refresh(); web3Mode.refresh() }}>刷新</Button>
       </Space>
     </Flex>
     {state.error && <Alert type="error" showIcon title="无法读取合约" description={state.error} />}
@@ -405,12 +799,16 @@ export function ContractDetailPage() {
           showIcon
           title={detail.status === 'active'
             ? activationSecurityReady ? '合约已生效' : '合约当前不可履约'
-            : '待完成平台内部结构化确认'}
+            : web3Enabled ? '待完成链上四方确认' : legacyConfirmationEnabled ? '待完成平台内部结构化确认' : '正在核验确认方式'}
           description={detail.status === 'active'
             ? activationSecurityReady
               ? '当前版本已经冻结，完成结算后进入受控执行准备。'
               : '当前安全验证存在阻断，请续签或修复合约后再结算。'
-            : '确认方式为平台内部结构化确认；每次确认均绑定当前版本与内容摘要。'}
+            : web3Enabled
+              ? '四方钱包只确认当前不可变摘要；链上回执须由平台服务端独立复核后才推进业务状态。'
+              : legacyConfirmationEnabled
+                ? '确认方式为平台内部结构化确认；每次确认均绑定当前版本与内容摘要。'
+                : '确认方式尚未核验完成，页面不会自动回退到另一种签署流程。'}
         />
         <Card>
           <Descriptions bordered column={{ xs: 1, md: 2 }}>
@@ -456,7 +854,14 @@ export function ContractDetailPage() {
             </div>
           </div>
         </details>
-        <Card title="四方确认">
+        {web3Enabled ? <Web3AgreementCard
+          identity={identity}
+          contractStatus={detail.status}
+          confirmationReady={confirmationSecurityReady}
+          activationReady={activationSecurityReady}
+          mode={web3Mode}
+          onChanged={() => { state.refresh(); audit.refresh() }}
+        /> : legacyConfirmationEnabled ? <Card title="四方确认">
           <Progress percent={Math.round(detail.confirmation_progress.completed / detail.confirmation_progress.required * 100)} />
           <div className="phase54-party-grid">
             {detail.parties.map((party) => <Card key={party.party_id} size="small">
@@ -471,7 +876,11 @@ export function ContractDetailPage() {
             <Button type="primary" icon={<CheckCircleOutlined />} disabled={!accepted || !confirmationSecurityReady} loading={busy === 'confirm'} onClick={() => command('confirm')}>确认当前版本</Button>
           </Flex>}
           {canActivate && <Button type="primary" icon={<FileProtectOutlined />} disabled={!activationSecurityReady} title={activationSecurityReady ? undefined : '八项安全检查全部通过后才能激活'} loading={busy === 'activate'} onClick={() => command('activate')} style={{ marginTop: 16 }}>激活数字合约</Button>}
-        </Card>
+        </Card> : <Card title="四方确认" loading={web3Mode.loading}>
+          {web3Mode.error
+            ? <Alert type="error" showIcon title="无法核验确认方式" description={web3Mode.error} />
+            : <Text type="secondary">正在读取平台确认方式…</Text>}
+        </Card>}
         <Card title="合约审计证据">
           <Timeline items={(audit.data?.items || []).map((event) => ({
             color: event.result === 'success' ? 'green' : 'red',

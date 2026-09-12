@@ -6,8 +6,10 @@ import {
   CloudDownloadOutlined,
   CreditCardOutlined,
   FileProtectOutlined,
+  LinkOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
+  WalletOutlined,
   WechatOutlined,
 } from '@ant-design/icons'
 import {
@@ -54,6 +56,25 @@ import {
 import { createSingleFlight } from './requestLifecycle'
 import { useRoadshow } from './RoadshowContext'
 import type { ProductKind, ServiceMode } from './serviceAccess'
+import type { DemoIdentity } from './types'
+import {
+  autoSettleLocalDemoEscrow,
+  clearWeb3FundingReference,
+  executePreparedWeb3Funding,
+  findWeb3EscrowForOrder,
+  getWalletCapabilities,
+  getWeb3EscrowStatus,
+  loadWeb3FundingReference,
+  prepareWeb3Escrow,
+  recoverSubmittedWeb3Funding,
+  saveWeb3FundingReference,
+  synchronizeFundingReceipt,
+  type WalletCapabilities,
+  type Web3EscrowStatusResponse,
+  type Web3FundingReference,
+  type Web3FundingStage,
+  type Web3SettlementProof,
+} from './web3Commerce'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -277,6 +298,342 @@ export function CommercialProviderSettlementPanel() {
   </Card>
 }
 
+const web3FundingStageLabels: Record<Web3FundingStage, string> = {
+  connecting_wallet: '连接并核对已核验钱包',
+  approving_token: '等待授权本订单精确金额',
+  waiting_for_approval: '等待授权交易确认',
+  opening_escrow: '等待建立链上托管',
+  waiting_for_funding: '等待托管交易确认',
+}
+
+const web3EscrowStatusLabels: Record<string, { label: string; color: string }> = {
+  prepared: { label: '已准备，待钱包付款', color: 'gold' },
+  funding: { label: '付款核验中', color: 'processing' },
+  funded: { label: '资金已托管，待执行', color: 'blue' },
+  proving: { label: '执行与交付证明收集中', color: 'purple' },
+  claimable: { label: '双证明完成，可按合约结算', color: 'green' },
+  refunded: { label: '已退款', color: 'default' },
+  disputed: { label: '争议处理中', color: 'red' },
+  orphaned: { label: '链上记录已失效', color: 'red' },
+}
+
+function hasFundingReceipt(
+  reference: Web3FundingReference | null,
+): reference is Required<Web3FundingReference> {
+  return Boolean(
+    reference
+    && typeof reference.transaction_hash === 'string'
+    && typeof reference.log_index === 'number',
+  )
+}
+
+function hasFundingSubmission(
+  reference: Web3FundingReference | null,
+): reference is Web3FundingReference & { transaction_hash: string } {
+  return Boolean(reference && typeof reference.transaction_hash === 'string')
+}
+
+function compactDigest(value: string | null | undefined): string {
+  if (!value) return '—'
+  return value.length > 22 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value
+}
+
+function settlementProofDisplay(proof: Web3SettlementProof | undefined): React.ReactNode {
+  if (!proof) return <Tag>尚未生成</Tag>
+  const finalized = proof.status === 'finalized'
+  return <Space size={6} wrap>
+    <Tag color={finalized ? 'green' : proof.status === 'orphaned' ? 'red' : 'gold'}>
+      {finalized ? '已由可信 RPC 核验' : proof.status === 'prepared' ? '待独立证明' : proof.status}
+    </Tag>
+    <Text code>{compactDigest(proof.proof_digest)}</Text>
+  </Space>
+}
+
+function Web3EscrowFlowCard({
+  order,
+  identity,
+  runExclusive,
+  onOrderChanged,
+}: {
+  order: CommercialOrder
+  identity: DemoIdentity
+  runExclusive: (operation: () => Promise<void>) => Promise<unknown>
+  onOrderChanged: (nextOrder: CommercialOrder) => void
+}) {
+  const [api, holder] = message.useMessage()
+  const [capabilities, setCapabilities] = useState<WalletCapabilities | null>(null)
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true)
+  const [flowError, setFlowError] = useState('')
+  const [reference, setReference] = useState<Web3FundingReference | null>(
+    () => loadWeb3FundingReference(order.order_id),
+  )
+  const [selected, setSelected] = useState(() => Boolean(reference))
+  const [escrow, setEscrow] = useState<Web3EscrowStatusResponse | null>(null)
+  const [statusLoading, setStatusLoading] = useState(false)
+  const [flowBusy, setFlowBusy] = useState(false)
+  const [progress, setProgress] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setCapabilitiesLoading(true)
+    getWalletCapabilities(controller.signal)
+      .then(setCapabilities)
+      .catch((reason: unknown) => {
+        if ((reason as { name?: string })?.name !== 'AbortError') {
+          setFlowError(reason instanceof Error ? reason.message : '钱包能力检查失败')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCapabilitiesLoading(false)
+      })
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!capabilities?.enabled || reference?.escrow_binding_id) return undefined
+    const controller = new AbortController()
+    setStatusLoading(true)
+    findWeb3EscrowForOrder(order.order_id, controller.signal)
+      .then((result) => {
+        if (!result.available) return
+        const discoveredReference = { escrow_binding_id: result.escrow_binding_id }
+        setReference(discoveredReference)
+        saveWeb3FundingReference(order.order_id, discoveredReference)
+      })
+      .catch((reason: unknown) => {
+        if ((reason as { name?: string })?.name !== 'AbortError') {
+          setFlowError(reason instanceof Error ? reason.message : '链上托管记录查询失败')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setStatusLoading(false)
+      })
+    return () => controller.abort()
+  }, [capabilities?.enabled, order.order_id, reference?.escrow_binding_id])
+
+  useEffect(() => {
+    if (!capabilities?.enabled || !reference?.escrow_binding_id) return undefined
+    const controller = new AbortController()
+    setStatusLoading(true)
+    getWeb3EscrowStatus(reference.escrow_binding_id, controller.signal)
+      .then(setEscrow)
+      .catch((reason: unknown) => {
+        if ((reason as { name?: string })?.name !== 'AbortError') {
+          const message = reason instanceof Error ? reason.message : '链上托管状态加载失败'
+          if (message.includes('（404）') || message.includes('不存在')) {
+            clearWeb3FundingReference(order.order_id)
+            setReference(null)
+            setEscrow(null)
+          }
+          setFlowError(message)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setStatusLoading(false)
+      })
+    return () => controller.abort()
+  }, [capabilities?.enabled, identity, order.order_id, reference?.escrow_binding_id])
+
+  const refreshEscrow = async () => {
+    if (!reference?.escrow_binding_id) return
+    setStatusLoading(true)
+    setFlowError('')
+    try {
+      setEscrow(await getWeb3EscrowStatus(reference.escrow_binding_id))
+    } catch (reason) {
+      setFlowError(reason instanceof Error ? reason.message : '链上托管状态加载失败')
+    } finally {
+      setStatusLoading(false)
+    }
+  }
+
+  const verifyFunding = async (fundingReference: Required<Web3FundingReference>) => {
+    setProgress('后端正在通过可信 RPC 复核回执')
+    const synchronized = await synchronizeFundingReceipt(fundingReference)
+    if (!synchronized.applied) {
+      const required = synchronized.required_confirmations ?? '所需'
+      setProgress(`可信 RPC 已见交易，确认数 ${synchronized.confirmations}/${required}`)
+      api.warning('链上确认数尚未达到后端要求，可稍后重新核验。')
+      return
+    }
+    const [nextEscrow, nextOrder] = await Promise.all([
+      getWeb3EscrowStatus(fundingReference.escrow_binding_id),
+      getCommercialOrder(order.order_id, identity),
+    ])
+    setEscrow(nextEscrow)
+    onOrderChanged(nextOrder)
+    setProgress('可信 RPC 已核验，自动交付权益已创建')
+    api.success('链上托管付款已由后端可信 RPC 核验。')
+  }
+
+  const startFunding = async () => {
+    if (!capabilities?.enabled || identity !== 'data_requester' || order.status !== 'awaiting_payment') return
+    await runExclusive(async () => {
+      setFlowBusy(true)
+      setFlowError('')
+      try {
+        if (hasFundingReceipt(reference)) {
+          await verifyFunding(reference)
+          return
+        }
+        setProgress('服务端正在冻结订单事实并准备两笔交易')
+        const preparation = await prepareWeb3Escrow(order.order_id, identity, order.status)
+        const preparedReference = { escrow_binding_id: preparation.escrow_binding_id }
+        if (!hasFundingSubmission(reference)) {
+          setReference(preparedReference)
+          saveWeb3FundingReference(order.order_id, preparedReference)
+        }
+        const walletResult = hasFundingSubmission(reference)
+          ? await recoverSubmittedWeb3Funding(preparation, reference.transaction_hash, (stage) => {
+            setProgress(web3FundingStageLabels[stage])
+          })
+          : await executePreparedWeb3Funding(
+            preparation,
+            (stage) => setProgress(web3FundingStageLabels[stage]),
+            (transactionHash) => {
+              const submittedReference = {
+                escrow_binding_id: preparation.escrow_binding_id,
+                transaction_hash: transactionHash,
+              }
+              setReference(submittedReference)
+              saveWeb3FundingReference(order.order_id, submittedReference)
+            },
+          )
+        const fundedReference: Required<Web3FundingReference> = {
+          escrow_binding_id: preparation.escrow_binding_id,
+          transaction_hash: walletResult.transaction_hash,
+          log_index: walletResult.log_index,
+        }
+        setReference(fundedReference)
+        saveWeb3FundingReference(order.order_id, fundedReference)
+        await verifyFunding(fundedReference)
+      } catch (reason) {
+        setFlowError(reason instanceof Error ? reason.message : '链上托管流程未完成')
+      } finally {
+        setFlowBusy(false)
+      }
+    })
+  }
+
+  const runLocalAutoSettlement = async () => {
+    if (
+      identity !== 'space_operator'
+      || !capabilities?.local_demo
+      || !reference?.escrow_binding_id
+      || !escrow
+      || !['funded', 'proving'].includes(escrow.status)
+    ) return
+    await runExclusive(async () => {
+      setFlowBusy(true)
+      setFlowError('')
+      setProgress('正在由两个独立的本地证明账户核验执行与获批交付')
+      try {
+        const result = await autoSettleLocalDemoEscrow(reference.escrow_binding_id)
+        setEscrow(await getWeb3EscrowStatus(reference.escrow_binding_id))
+        setProgress(result.idempotent_replay ? '链上结算此前已完成' : '双证明已核验，智能合约已自动完成结算')
+        api.success(result.idempotent_replay ? '链上结算状态已同步。' : '执行与交付双证明已通过，托管资金已按合约自动结算。')
+      } catch (reason) {
+        setFlowError(reason instanceof Error ? reason.message : '本地演示链自动结算失败')
+      } finally {
+        setFlowBusy(false)
+      }
+    })
+  }
+
+  const executionProof = escrow?.proofs.find((item) => item.proof_type === 'execution')
+  const deliveryProof = escrow?.proofs.find((item) => item.proof_type === 'delivery')
+  const statusMeta = escrow ? web3EscrowStatusLabels[escrow.status] : undefined
+  const capabilityReady = Boolean(capabilities?.enabled)
+  const paidWithoutDemoReceipt = order.status === 'paid' && !order.payment
+
+  return <Card
+    size="small"
+    title={<Space><LinkOutlined />链上托管与自动交付<Tag color="purple">显式可选</Tag></Space>}
+    extra={<Tag color="orange">
+      {capabilities?.local_demo ? '本地演示链' : capabilities?.chain_name || '演示链'} · 合约未审计
+    </Tag>}
+    style={{ borderColor: '#d3adf7' }}
+  >
+    {holder}
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="warning"
+        showIcon
+        title="仅用于演示，不代表真实资金或生产安全"
+        description="本路径使用演示结算币与未审计合约，不代表法币支付、生产托管或临床级安全。钱包回执只用于定位日志，事件内容和最终状态由后端通过配置的可信 RPC 重新核验。"
+      />
+      <Space size={4} wrap>
+        <Tag color="purple">1 · approve 精确授权</Tag><Text type="secondary">→</Text>
+        <Tag color="purple">2 · open escrow 托管</Tag><Text type="secondary">→</Text>
+        <Tag color="blue">3 · 可信 RPC 核验付款</Tag><Text type="secondary">→</Text>
+        <Tag color="green">4 · 双证明触发自动结算</Tag>
+      </Space>
+
+      {flowError && <Alert type="error" showIcon title="链上演示流程未完成" description={flowError} />}
+      <Space wrap>
+        <Tag color={capabilityReady ? 'green' : 'default'}>
+          {capabilitiesLoading ? '正在检查能力' : capabilityReady ? `${capabilities?.chain_name} 已启用` : '链上路径未启用'}
+        </Tag>
+        <Text type="secondary">{capabilities?.notice || '模拟支付仍可正常使用'}</Text>
+      </Space>
+
+      {order.status === 'agreement_pending' && <Text type="secondary">确认服务协议后，需求方才可选择链上演示托管。</Text>}
+      {order.status === 'awaiting_payment' && identity !== 'data_requester' && <Text type="secondary">仅需求方可发起托管付款；其他角色只能在付款后查看经授权的证明状态。</Text>}
+      {order.status === 'awaiting_payment' && identity === 'data_requester' && <Space wrap>
+        {!selected ? <Button
+          icon={<WalletOutlined />}
+          loading={capabilitiesLoading}
+          disabled={!capabilityReady}
+          onClick={() => setSelected(true)}
+        >选择链上演示托管</Button> : <>
+          <Button
+            icon={<WalletOutlined />}
+            loading={flowBusy}
+            disabled={!capabilityReady}
+            onClick={startFunding}
+          >{hasFundingReceipt(reference) ? '让后端重新核验回执' : hasFundingSubmission(reference) ? '恢复链上托管回执' : reference ? '继续钱包授权与托管' : '授权并建立链上托管'}</Button>
+          {!reference && <Button type="link" disabled={flowBusy} onClick={() => setSelected(false)}>改用上方模拟支付</Button>}
+        </>}
+        {progress && <Text type="secondary">{progress}</Text>}
+      </Space>}
+
+      {order.status === 'paid' && <Spin spinning={statusLoading}>
+        <Descriptions size="small" column={1} bordered>
+          <Descriptions.Item label="执行证明">{settlementProofDisplay(executionProof)}</Descriptions.Item>
+          <Descriptions.Item label="交付证明">{settlementProofDisplay(deliveryProof)}</Descriptions.Item>
+          <Descriptions.Item label="结算状态">
+            {escrow && statusMeta
+              ? <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+              : reference
+                ? <Tag>等待加载链上托管状态</Tag>
+                : paidWithoutDemoReceipt
+                  ? <Tag>当前浏览器未保存托管标识</Tag>
+                  : <Tag>模拟支付路径，不适用链上结算</Tag>}
+          </Descriptions.Item>
+        </Descriptions>
+        <Space wrap style={{ marginTop: 10 }}>
+          {escrow?.funding_tx_hash && <Text type="secondary">托管交易 <Text code>{compactDigest(escrow.funding_tx_hash)}</Text></Text>}
+          {reference && capabilityReady && <Button size="small" icon={<ReloadOutlined />} loading={statusLoading} onClick={refreshEscrow}>刷新证明状态</Button>}
+          {identity === 'space_operator'
+            && capabilities?.local_demo
+            && escrow
+            && ['funded', 'proving'].includes(escrow.status)
+            && <Button
+              type="primary"
+              size="small"
+              loading={flowBusy}
+              onClick={runLocalAutoSettlement}
+            >运行独立证明并自动结算</Button>}
+        </Space>
+        {identity === 'space_operator' && capabilities?.local_demo && escrow && <Paragraph type="secondary" style={{ marginTop: 10, marginBottom: 0 }}>
+          本地按钮模拟执行证明服务与交付证明服务使用两个独立测试账户；运营账号不能替代任何一方证明。生产部署必须接入彼此独立的证明服务和经审计合约。
+        </Paragraph>}
+        {progress && order.status === 'paid' && <Text type="secondary">{progress}</Text>}
+      </Spin>}
+    </Space>
+  </Card>
+}
+
 export function CommercialCheckoutPage() {
   const { identity } = useRoadshow()
   const { orderId = '' } = useParams()
@@ -357,6 +714,11 @@ export function CommercialCheckoutPage() {
   const downloadableFulfillment = order?.fulfillments.find((item) => item.downloadable)
   const canCreateDownloadGrant = Boolean(order?.allowed_actions.includes('create_download_grant'))
   const deliveryCompleted = downloadableFulfillment?.download_grant_status === 'consumed'
+  const storedFundingReference = order ? loadWeb3FundingReference(order.order_id) : null
+  const paidViaWeb3 = Boolean(order?.status === 'paid' && !order.payment)
+  const visibleOrderStatus = order?.status === 'paid' && paidViaWeb3
+    ? { label: '链上托管已核验', color: 'green' }
+    : order ? orderStatusLabels[order.status] : undefined
 
   return <div className="page-stack commerce-checkout-page">
     {holder}
@@ -364,7 +726,7 @@ export function CommercialCheckoutPage() {
       <div>
         <Text className="commerce-eyebrow">TRUSTED COMMERCIAL WORKFLOW</Text>
         <Title level={2}>结算与自动交付</Title>
-        <Paragraph>审批与合同完成后，在此确认不可变报价、完成模拟支付并进入受控履约。</Paragraph>
+        <Paragraph>审批与合同完成后，在此确认不可变报价，选择模拟支付或可选的链上演示托管并进入受控履约。</Paragraph>
       </div>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/applications')}>返回我的申请</Button>
     </div>
@@ -372,14 +734,14 @@ export function CommercialCheckoutPage() {
     <Spin spinning={loading}>
       {order && <>
         <div className="commerce-checkout-steps" aria-label="商业结算流程">
-          {['审批与合同', '确认协议', '模拟支付', '执行或交付'].map((label, index) => {
+          {['审批与合同', '确认协议', '支付或托管', '执行或交付'].map((label, index) => {
             const current = order.status === 'agreement_pending' ? 1 : order.status === 'awaiting_payment' ? 2 : 3
             return <div className={index <= current ? 'is-active' : ''} key={label}><span>{index < current ? <CheckCircleFilled /> : index + 1}</span>{label}</div>
           })}
         </div>
         <div className="commerce-checkout-grid">
           <main className="commerce-checkout-main">
-            <Card title={<Space><FileProtectOutlined />订单清单</Space>} extra={<Tag color={(orderStatusLabels[order.status] || {}).color}>{(orderStatusLabels[order.status] || {}).label || order.status}</Tag>}>
+            <Card title={<Space><FileProtectOutlined />订单清单</Space>} extra={<Tag color={visibleOrderStatus?.color}>{visibleOrderStatus?.label || order.status}</Tag>}>
               <Descriptions size="small" column={{ xs: 1, md: 2 }}>
                 <Descriptions.Item label="订单编号"><Text code>{order.order_number}</Text></Descriptions.Item>
                 <Descriptions.Item label="计价币种">人民币 CNY</Descriptions.Item>
@@ -413,11 +775,21 @@ export function CommercialCheckoutPage() {
               <Button type="primary" size="large" disabled={!paymentMethod} loading={busy === 'pay'} onClick={pay}>完成模拟支付</Button>
             </Card>}
 
+            <Web3EscrowFlowCard
+              key={order.order_id}
+              order={order}
+              identity={identity}
+              runExclusive={(operation) => guard.run(operation)}
+              onOrderChanged={setOrder}
+            />
+
             {order.status === 'paid' && <Card className="commerce-paid-card">
               <Result
                 status="success"
-                title="模拟支付成功"
-                subTitle={order.payment ? `DEMO-PAY 回执 ${order.payment.transaction_number} · ${new Date(order.payment.paid_at).toLocaleString()}` : 'DEMO-PAY 回执已生成'}
+                title={paidViaWeb3 ? '链上演示托管付款已核验' : '模拟支付成功'}
+                subTitle={paidViaWeb3 && storedFundingReference?.transaction_hash
+                  ? `演示链交易 ${compactDigest(storedFundingReference.transaction_hash)} · 已由后端可信 RPC 复核`
+                  : paidViaWeb3 ? '链上付款证据已由后端可信 RPC 复核' : order.payment ? `DEMO-PAY 回执 ${order.payment.transaction_number} · ${new Date(order.payment.paid_at).toLocaleString()}` : 'DEMO-PAY 回执已生成'}
                 extra={<Space wrap>
                   {executionContractId && <Button type="primary" icon={<BankOutlined />} onClick={() => navigate(`/execution/${executionContractId}`)}>进入受控执行准备</Button>}
                   {canCreateDownloadGrant && <Button type="primary" icon={<CloudDownloadOutlined />} loading={busy === 'download'} onClick={download}>下载安全履约包</Button>}

@@ -17,7 +17,7 @@ test('model marketplace includes clearly bounded partner showcase cards', async 
 
 test('showcase details are progressive and cannot enter application or payment', async () => {
   const source = await readFile(modelPagePath, 'utf8')
-  const showcase = source.match(/function PartnerModelShowcaseCard[\s\S]*?\n}\n\nfunction PageLoad/)?.[0]
+  const showcase = source.match(/function PartnerModelShowcaseCard[\s\S]*?\r?\n}\r?\n\r?\nfunction PageLoad/)?.[0]
 
   assert.ok(showcase, 'missing PartnerModelShowcaseCard')
   assert.match(showcase, /marketplace-card-details/)

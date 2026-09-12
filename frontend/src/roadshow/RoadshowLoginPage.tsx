@@ -1,10 +1,11 @@
-import { BankOutlined, CheckOutlined, RobotOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons'
-import { Alert, Button, Form, Input } from 'antd'
+import { BankOutlined, CheckOutlined, RobotOutlined, SafetyCertificateOutlined, TeamOutlined, WalletOutlined } from '@ant-design/icons'
+import { Alert, Button, Form, Input, Tag } from 'antd'
 import type { InputRef } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Brand } from '../components/Brand'
 import { roleProfiles, useRoadshow } from './RoadshowContext'
+import { getWalletCapabilities, signInWithInjectedWallet, type WalletCapabilities } from './web3Wallet'
 import type { DemoIdentity } from './types'
 
 const icons: Record<DemoIdentity, React.ReactNode> = {
@@ -27,12 +28,28 @@ export function RoadshowLoginPage() {
   const [selected, setSelected] = useState(identity)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [walletBusy, setWalletBusy] = useState(false)
+  const [walletError, setWalletError] = useState('')
+  const [walletAddress, setWalletAddress] = useState('')
+  const [walletChainId, setWalletChainId] = useState<number | null>(null)
+  const [walletCapabilities, setWalletCapabilities] = useState<WalletCapabilities | null>(null)
   const [form] = Form.useForm()
   const passwordInputRef = useRef<InputRef>(null)
   const roles = Object.entries(roleProfiles) as Array<[DemoIdentity, typeof roleProfiles[DemoIdentity]]>
   useEffect(() => {
     form.setFieldsValue({ username: usernames[selected], password: localDemoPassword })
   }, [form, selected])
+  useEffect(() => {
+    const controller = new AbortController()
+    getWalletCapabilities(controller.signal)
+      .then(setWalletCapabilities)
+      .catch(() => setWalletCapabilities(null))
+    return () => controller.abort()
+  }, [])
+  const destination = (() => {
+    const requested = (location.state as { from?: string } | null)?.from
+    return requested?.startsWith('/') && !requested.startsWith('//') ? requested : '/overview'
+  })()
   return <main className="login-page phase4-login">
     <section className="login-hero"><div className="login-hero__inner">
       <Brand />
@@ -63,8 +80,7 @@ export function RoadshowLoginPage() {
           setBusy(true); setError('')
           try {
             await login(username, password)
-            const requested = (location.state as { from?: string } | null)?.from
-            navigate(requested || '/overview', { replace: true })
+            navigate(destination, { replace: true })
           } catch (reason) {
             setError(reason instanceof Error ? reason.message : '账号或密码无效')
           } finally {
@@ -83,10 +99,54 @@ export function RoadshowLoginPage() {
             onPressEnter={() => form.submit()}
           />
         </Form.Item>
-        <Button type="primary" htmlType="submit" size="large" block loading={busy}>
+        <Button type="primary" htmlType="submit" size="large" block loading={busy} disabled={walletBusy}>
           进入{roleProfiles[selected].shortLabel}门户
         </Button>
       </Form>
+      {walletCapabilities?.enabled && <div style={{ marginTop: 18, padding: 16, border: '1px solid #d7e4ec', borderRadius: 12, background: '#f8fbfd' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+          <strong>钱包签名登录</strong>
+          <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{walletCapabilities.chain_name}</Tag>
+        </div>
+        <div style={{ color: '#637888', fontSize: 13, lineHeight: 1.65, marginBottom: 12 }}>
+          钱包只证明地址控制权；身份和角色由服务端已审核绑定决定，与上方角色选择无关。
+        </div>
+        {walletError && <Alert type="error" showIcon title="钱包登录失败" description={walletError} style={{ marginBottom: 12 }} />}
+        {(walletAddress || walletChainId !== null) && <div style={{ marginBottom: 12, padding: '9px 11px', borderRadius: 8, background: '#eef5f8', color: '#415969', fontSize: 12, lineHeight: 1.6 }}>
+          {walletChainId !== null && <div>Chain ID：{walletChainId}</div>}
+          {walletAddress && <div style={{ wordBreak: 'break-all' }}>地址：{walletAddress}</div>}
+        </div>}
+        <Button
+          icon={<WalletOutlined />}
+          block
+          size="large"
+          loading={walletBusy}
+          disabled={busy}
+          onClick={async () => {
+            setWalletBusy(true)
+            setWalletError('')
+            setError('')
+            try {
+              await signInWithInjectedWallet((wallet) => {
+                setWalletAddress(wallet.address)
+                setWalletChainId(wallet.chainId)
+              })
+              // A full navigation lets RoadshowProvider bootstrap from the new
+              // HttpOnly session without exposing the session secret to JS.
+              window.location.replace(destination)
+            } catch (reason) {
+              setWalletError(reason instanceof Error ? reason.message : '钱包签名登录未完成。')
+            } finally {
+              setWalletBusy(false)
+            }
+          }}
+        >
+          连接钱包并签名
+        </Button>
+        <div style={{ marginTop: 9, color: '#8798a4', fontSize: 12, lineHeight: 1.55 }}>
+          {walletCapabilities.notice}
+        </div>
+      </div>}
     </div></section>
   </main>
 }
